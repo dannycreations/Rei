@@ -7,15 +7,16 @@ import { internalToResponse, OpenAIRequest, requestToInternal } from './Handler.
 export const openAIRouter = HttpRouter.empty.pipe(
   HttpRouter.post(
     '/v1/chat/completions',
-    Effect.gen(function* (_) {
-      const registry = yield* _(ProviderRegistry);
-      const body = yield* _(HttpServerRequest.schemaBodyJson(OpenAIRequest));
+    Effect.gen(function* () {
+      const registry = yield* ProviderRegistry;
+      const body = yield* HttpServerRequest.schemaBodyJson(OpenAIRequest);
 
-      const provider = yield* _(registry.getProvider(body.model));
-      const internalRequest = requestToInternal(body);
-      const response = yield* _(provider.execute(internalRequest));
+      const mappedModel = registry.mapModel(body.model);
+      const provider = yield* registry.getProvider(mappedModel);
+      const internalRequest = { ...requestToInternal(body), model: mappedModel };
+      const response = yield* provider.execute(internalRequest);
 
-      return yield* _(HttpServerResponse.json(internalToResponse(response)));
+      return yield* HttpServerResponse.json(internalToResponse(response));
     }),
   ),
 );

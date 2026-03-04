@@ -20,10 +20,10 @@ export class OpenAIProvider implements Provider {
       Effect.catchAll((e) => Effect.fail(new Error(String(e)))),
     );
 
-    return Effect.gen(this, function* (_) {
-      const client = yield* _(HttpClient.HttpClient);
-      const res = yield* _(req.pipe(Effect.flatMap((r) => client.execute(r))));
-      const json: any = yield* _(res.json);
+    return Effect.gen(this, function* () {
+      const client = yield* HttpClient.HttpClient;
+      const res = yield* req.pipe(Effect.flatMap((r) => client.execute(r)));
+      const json: any = yield* res.json;
       return {
         id: json.id,
         model: json.model,
