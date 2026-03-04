@@ -1,6 +1,8 @@
 import { Schema } from 'effect';
 
-import { InternalRequest, InternalResponse } from '../../core/Schema.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
+
+import type { ApiHandler } from '../../core/Server.js';
 
 export const AnthropicMessageRole = Schema.Literal('user', 'assistant');
 
@@ -30,7 +32,9 @@ export const AnthropicRequest = Schema.Struct({
   system: Schema.optional(Schema.String),
   max_tokens: Schema.Number,
   temperature: Schema.optional(Schema.Number),
+  top_p: Schema.optional(Schema.Number),
   stream: Schema.optional(Schema.Boolean),
+  stop_sequences: Schema.optional(Schema.Array(Schema.String)),
 });
 
 export type AnthropicRequest = Schema.Schema.Type<typeof AnthropicRequest>;
@@ -56,63 +60,74 @@ export const AnthropicResponse = Schema.Struct({
 
 export type AnthropicResponse = Schema.Schema.Type<typeof AnthropicResponse>;
 
-export const requestToInternal = (req: AnthropicRequest): InternalRequest => {
-  const messages: Array<InternalRequest['messages'][number]> = [];
+export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> = {
+  requestToInternal: (req: AnthropicRequest): InternalRequest => {
+    const messages: Array<InternalRequest['messages'][number]> = [];
 
-  if (req.system) {
-    messages.push({
-      role: 'system',
-      content: req.system,
-    });
-  }
-
-  for (const msg of req.messages) {
-    if (typeof msg.content === 'string') {
-      messages.push({
-        role: msg.role,
-        content: msg.content,
-      });
-    } else {
-      messages.push({
-        role: msg.role,
-        content: msg.content.map((c) => {
-          if (c.type === 'text') {
-            return { type: 'text', text: c.text };
-          } else {
-            // Anthropic image to internal image format
-            // Internal image is currently just a string (base64 or url)
-            // Anthropic has a more complex structure
-            return { type: 'image', image: c.source.data };
-          }
-        }),
-      });
+    for (const msg of req.messages) {
+      if (typeof msg.content === 'string') {
+        messages.push({
+          role: msg.role,
+          content: msg.content,
+        });
+      } else {
+        messages.push({
+          role: msg.role,
+          content: msg.content.map((c) => {
+            if (c.type === 'text') {
+              return { type: 'text', text: c.text };
+            } else {
+              return { type: 'image', image: c.source.data };
+            }
+          }),
+        });
+      }
     }
-  }
 
-  return {
-    model: req.model,
-    messages: messages as InternalRequest['messages'],
-    maxTokens: req.max_tokens,
-    temperature: req.temperature,
-    stream: req.stream ?? false,
-  };
-};
-
-export const internalToResponse = (res: InternalResponse): AnthropicResponse => ({
-  id: res.id,
-  type: 'message',
-  role: res.role === 'assistant' ? 'assistant' : 'user', // Anthropic only supports user/assistant in messages
-  content: [
-    {
-      type: 'text',
-      text: res.content,
-    },
-  ],
-  model: res.model,
-  stop_reason: 'end_turn',
-  stop_sequence: null,
-  usage: {
-    input_tokens: res.usage.promptTokens,
-    output_tokens: res.usage.completionTokens,
+    return {
+      model: req.model,
+      system: req.system,
+      messages: messages as InternalRequest['messages'],
+      maxTokens: req.max_tokens,
+      temperature: req.temperature,
+      topP: req.top_p,
+      stream: req.stream ?? false,
+      stop: req.stop_sequences,
+    };
   },
-});
+
+  internalToResponse: (res: InternalResponse): AnthropicResponse => ({
+    id: res.id,
+    type: 'message',
+    role: res.role === 'assistant' ? 'assistant' : 'user',
+    content: [
+      {
+        type: 'text',
+        text: res.content,
+      },
+    ],
+    model: res.model,
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: res.usage.promptTokens,
+      output_tokens: res.usage.completionTokens,
+    },
+  }),
+
+  internalToStreamChunk: (chunk: InternalStreamChunk) => {
+    if (chunk.done) {
+      return {
+        type: 'message_stop',
+      };
+    }
+    return {
+      type: 'content_block_delta',
+      index: 0,
+      delta: {
+        type: 'text_delta',
+        text: chunk.content,
+      },
+    };
+  },
+};

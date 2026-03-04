@@ -56,7 +56,7 @@ const run = (args: {
         Effect.provide(ConfigLive(configPath)),
         Effect.provide(NodeContext.layer),
         Effect.catchAllCause((cause) => Effect.logError(cause)),
-      );
+      ) as Effect.Effect<void, never, never>;
 
     yield* startServer(args.options.port);
   });

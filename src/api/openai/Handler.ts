@@ -1,6 +1,8 @@
 import { Schema } from 'effect';
 
-import { InternalRequest, InternalResponse } from '../../core/Schema.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
+
+import type { ApiHandler } from '../../core/Server.js';
 
 export const OpenAIMessageRole = Schema.Literal('user', 'assistant', 'system', 'tool');
 
@@ -29,7 +31,9 @@ export const OpenAIRequest = Schema.Struct({
   messages: Schema.Array(OpenAIMessage),
   temperature: Schema.optional(Schema.Number),
   max_tokens: Schema.optional(Schema.Number),
+  top_p: Schema.optional(Schema.Number),
   stream: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+  stop: Schema.optional(Schema.Union(Schema.String, Schema.Array(Schema.String))),
 });
 
 export type OpenAIRequest = Schema.Schema.Type<typeof OpenAIRequest>;
@@ -58,54 +62,74 @@ export const OpenAIResponse = Schema.Struct({
 
 export type OpenAIResponse = Schema.Schema.Type<typeof OpenAIResponse>;
 
-export const requestToInternal = (req: OpenAIRequest): InternalRequest => {
-  const messages: Array<InternalRequest['messages'][number]> = req.messages.map((msg) => {
-    if (typeof msg.content === 'string') {
-      return {
-        role: msg.role,
-        content: msg.content,
-      };
-    } else {
-      return {
-        role: msg.role,
-        content: msg.content.map((c) => {
-          if (c.type === 'text') {
-            return { type: 'text', text: c.text };
-          } else {
-            return { type: 'image', image: c.image_url.url };
-          }
-        }),
-      };
-    }
-  });
+export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
+  requestToInternal: (req: OpenAIRequest): InternalRequest => {
+    const messages: Array<InternalRequest['messages'][number]> = req.messages.map((msg) => {
+      if (typeof msg.content === 'string') {
+        return {
+          role: msg.role,
+          content: msg.content,
+        };
+      } else {
+        return {
+          role: msg.role,
+          content: msg.content.map((c) => {
+            if (c.type === 'text') {
+              return { type: 'text', text: c.text };
+            } else {
+              return { type: 'image', image: c.image_url.url };
+            }
+          }),
+        };
+      }
+    });
 
-  return {
-    model: req.model,
-    messages: messages as InternalRequest['messages'],
-    temperature: req.temperature,
-    maxTokens: req.max_tokens,
-    stream: req.stream ?? false,
-  };
-};
-
-export const internalToResponse = (res: InternalResponse): OpenAIResponse => ({
-  id: res.id,
-  object: 'chat.completion',
-  created: Math.floor(Date.now() / 1000),
-  model: res.model,
-  choices: [
-    {
-      index: 0,
-      message: {
-        role: res.role,
-        content: res.content,
-      },
-      finish_reason: 'stop',
-    },
-  ],
-  usage: {
-    prompt_tokens: res.usage.promptTokens,
-    completion_tokens: res.usage.completionTokens,
-    total_tokens: res.usage.totalTokens,
+    return {
+      model: req.model,
+      messages: messages as InternalRequest['messages'],
+      temperature: req.temperature,
+      topP: req.top_p,
+      maxTokens: req.max_tokens,
+      stream: req.stream ?? false,
+      stop: typeof req.stop === 'string' ? [req.stop] : req.stop,
+    };
   },
-});
+
+  internalToResponse: (res: InternalResponse): OpenAIResponse => ({
+    id: res.id,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: res.model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: res.role,
+          content: res.content,
+        },
+        finish_reason: 'stop',
+      },
+    ],
+    usage: {
+      prompt_tokens: res.usage.promptTokens,
+      completion_tokens: res.usage.completionTokens,
+      total_tokens: res.usage.totalTokens,
+    },
+  }),
+
+  internalToStreamChunk: (chunk: InternalStreamChunk) => ({
+    id: chunk.id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model: 'stream',
+    choices: [
+      {
+        index: 0,
+        delta: {
+          content: chunk.content,
+        },
+        finish_reason: chunk.done ? 'stop' : null,
+      },
+    ],
+  }),
+};

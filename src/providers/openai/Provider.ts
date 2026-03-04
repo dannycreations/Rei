@@ -90,6 +90,8 @@ export class OpenAIProvider implements Provider {
       temperature: request.temperature,
       max_tokens: request.maxTokens,
       stream: request.stream,
+      top_p: request.topP,
+      stop: request.stop,
     };
   }
 }

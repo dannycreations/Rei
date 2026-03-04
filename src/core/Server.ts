@@ -1,8 +1,10 @@
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse } from '@effect/platform';
-import { Effect, Option } from 'effect';
+import { Effect, Option, Stream } from 'effect';
 
 import { anthropicRouter } from '../api/anthropic/Router.js';
 import { openAIRouter } from '../api/openai/Router.js';
+import { ProviderRegistry } from '../core/Provider.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from '../core/Schema.js';
 import { isLocalhost } from '../helpers/Server.js';
 import { ConfigTag } from './Config.js';
 
@@ -36,3 +38,51 @@ export const server = HttpRouter.empty.pipe(
     ),
   ),
 );
+
+export interface ApiHandler<R, T> {
+  readonly requestToInternal: (req: R) => InternalRequest;
+  readonly internalToResponse: (res: InternalResponse) => T;
+  readonly internalToStreamChunk: (chunk: InternalStreamChunk) => unknown;
+}
+
+export const Dispatcher = Effect.gen(function* () {
+  const registry = yield* ProviderRegistry;
+
+  return {
+    dispatch: <R, T>(body: R, handler: ApiHandler<R, T>) =>
+      Effect.flatMap(
+        Effect.gen(function* () {
+          const internalReq = handler.requestToInternal(body);
+          const mappedModel = registry.mapModel(internalReq.model);
+          const provider = yield* registry.getProvider(mappedModel);
+
+          const request = { ...internalReq, model: mappedModel };
+
+          if (request.stream) {
+            const stream = provider.stream(request);
+            return HttpServerResponse.stream(
+              stream.pipe(
+                Stream.map((chunk) => {
+                  const mapped = handler.internalToStreamChunk(chunk);
+                  return `data: ${JSON.stringify(mapped)}\n\n`;
+                }),
+                Stream.concat(Stream.make('data: [DONE]\n\n')),
+                Stream.encodeText,
+              ),
+              {
+                headers: {
+                  'Content-Type': 'text/event-stream',
+                  'Cache-Control': 'no-cache',
+                  Connection: 'keep-alive',
+                },
+              },
+            );
+          }
+
+          const response = yield* provider.execute(request);
+          return HttpServerResponse.json(handler.internalToResponse(response));
+        }),
+        (res) => Effect.succeed(res),
+      ) as Effect.Effect<HttpServerResponse.HttpServerResponse, Error, never>,
+  };
+});

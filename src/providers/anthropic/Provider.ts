@@ -89,8 +89,12 @@ export class AnthropicProvider implements Provider {
   private mapRequest(request: InternalRequest) {
     return {
       model: request.model,
-      messages: request.messages,
+      system: request.system,
+      messages: [...request.messages].filter((m) => m.role !== 'system'),
       max_tokens: request.maxTokens ?? 4096,
+      temperature: request.temperature,
+      top_p: request.topP,
+      stop_sequences: request.stop,
       stream: request.stream,
     };
   }

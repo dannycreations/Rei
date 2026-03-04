@@ -115,6 +115,13 @@ export class GeminiCliProvider implements Provider {
   }
 
   private mapRequest(request: InternalRequest) {
+    const systemInstruction = request.system
+      ? {
+          role: 'user',
+          parts: [{ text: request.system }],
+        }
+      : undefined;
+
     const contents = request.messages
       .filter((m) => m.role !== 'system')
       .map((m) => {
@@ -136,20 +143,14 @@ export class GeminiCliProvider implements Provider {
         };
       });
 
-    const systemMessage = request.messages.find((m) => m.role === 'system');
-    const systemInstruction = systemMessage
-      ? {
-          role: 'user',
-          parts: [{ text: typeof systemMessage.content === 'string' ? systemMessage.content : '' }],
-        }
-      : undefined;
-
     return {
       contents,
       systemInstruction,
       generationConfig: {
         temperature: request.temperature,
         maxOutputTokens: request.maxTokens,
+        topP: request.topP,
+        stopSequences: request.stop,
       },
     };
   }
