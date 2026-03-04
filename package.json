@@ -1,0 +1,42 @@
+{
+  "name": "rei",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "author": "dannycreations",
+  "license": "GPL",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start:watch": "npm run clean && tsx watch src/main.ts",
+    "start:debug": "npm run build && node --inspect-brk .",
+    "build": "npm run clean && tsc",
+    "check": "npm run format && tsc --noEmit",
+    "test": "vitest",
+    "format": "prettier --write .",
+    "clean": "rimraf -g \"*.tsbuildinfo\" \"dist\"",
+    "clean:node": "rimraf -g \"*-lock*\" \"node_modules\"",
+    "update": "npm-check-updates -u -x @types/node",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@effect/cli": "^0.73.2",
+    "@effect/platform": "^0.94.5",
+    "@effect/platform-node": "^0.104.1",
+    "effect": "^3.19.19",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.27.0",
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@sapphire/ts-config": "^5.0.3",
+    "@types/node": "24.x",
+    "husky": "^9.1.7",
+    "npm-check-updates": "^19.6.3",
+    "prettier": "^3.8.1",
+    "rimraf": "^6.1.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@10.30.3"
+}
