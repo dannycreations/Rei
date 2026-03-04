@@ -64,7 +64,7 @@ export type OpenAIResponse = Schema.Schema.Type<typeof OpenAIResponse>;
 
 export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
   requestToInternal: (req: OpenAIRequest): InternalRequest => {
-    const messages: Array<InternalRequest['messages'][number]> = req.messages.map((msg) => {
+    const messages: InternalRequest['messages'] = req.messages.map((msg) => {
       if (typeof msg.content === 'string') {
         return {
           role: msg.role,
@@ -86,7 +86,7 @@ export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
 
     return {
       model: req.model,
-      messages: messages as InternalRequest['messages'],
+      messages,
       temperature: req.temperature,
       topP: req.top_p,
       maxTokens: req.max_tokens,

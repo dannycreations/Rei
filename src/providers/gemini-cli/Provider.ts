@@ -35,7 +35,7 @@ const mapRequest = (request: InternalRequest) => {
   const contents = request.messages
     .filter((m) => m.role !== 'system')
     .map((m) => {
-      let parts: any[] = [];
+      let parts: Array<{ text: string }> = [];
       if (typeof m.content === 'string') {
         parts = [{ text: m.content }];
       } else {
@@ -89,14 +89,17 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
     );
 
     const loadRes = yield* Effect.flatMap(loadReq, (r) => client.execute(r));
-    const loadJson: any = yield* loadRes.json;
+    const loadJson = (yield* loadRes.json) as {
+      cloudaicompanionProject?: string;
+      allowedTiers?: Array<{ id: string; isDefault?: boolean }>;
+    };
 
     let projectId = 'dummy-project';
 
     if (loadJson.cloudaicompanionProject) {
       projectId = loadJson.cloudaicompanionProject;
     } else {
-      const tierId = loadJson.allowedTiers?.find((t: any) => t.id === 'free-tier' || (t as any).isDefault)?.id || 'free-tier';
+      const tierId = loadJson.allowedTiers?.find((t) => t.id === 'free-tier' || t.isDefault)?.id || 'free-tier';
       const onboardReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:onboardUser`).pipe(
         HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
         HttpClientRequest.bodyJson({
@@ -106,7 +109,9 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
       );
 
       const onboardRes = yield* Effect.flatMap(onboardReq, (r) => client.execute(r));
-      const onboardJson: any = yield* onboardRes.json;
+      const onboardJson = (yield* onboardRes.json) as {
+        response?: { cloudaicompanionProject?: { id?: string } };
+      };
       projectId = onboardJson.response?.cloudaicompanionProject?.id || 'dummy-project';
     }
 
@@ -150,7 +155,12 @@ const ensureAuthenticated = (): Effect.Effect<
         }),
       );
       const res = yield* Effect.flatMap(refreshReq, (r) => client.execute(r));
-      const json: any = yield* res.json;
+      const json = (yield* res.json) as {
+        access_token: string;
+        refresh_token?: string;
+        token_type?: string;
+        expires_in?: number;
+      };
 
       credentials = {
         ...credentials,
@@ -187,13 +197,25 @@ export const GeminiCliProvider: Provider = {
 
       const client = yield* HttpClient.HttpClient;
       const res = yield* Effect.flatMap(req, (r) => client.execute(r));
-      const json: any = yield* res.json;
+      type GeminiResponse = {
+        response?: {
+          candidates?: Array<{
+            content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+          }>;
+          usageMetadata?: {
+            promptTokenCount?: number;
+            candidatesTokenCount?: number;
+          };
+          responseId?: string;
+        };
+      };
+      const json = (yield* res.json) as GeminiResponse;
 
       const candidate = json.response?.candidates?.[0];
       const content =
         candidate?.content?.parts
-          ?.filter((p: any) => p.text && !p.thought)
-          ?.map((p: any) => p.text)
+          ?.filter((p) => p.text && !p.thought)
+          ?.map((p) => p.text)
           ?.join('') || '';
 
       const usage = json.response?.usageMetadata || {};
@@ -237,8 +259,21 @@ export const GeminiCliProvider: Provider = {
           Stream.filter((line) => line.startsWith('data: ')),
           Stream.map((line) => line.slice(6).trim()),
           Stream.filter((line) => line.length > 0),
-          Stream.mapEffect((line) => Effect.try(() => JSON.parse(line))),
-          Stream.map((json: any) => {
+          Stream.mapEffect((line) =>
+            Effect.try(
+              () =>
+                JSON.parse(line) as {
+                  response?: {
+                    candidates?: Array<{
+                      content?: { parts?: Array<{ text?: string }> };
+                      finishReason?: string | null;
+                    }>;
+                    responseId?: string;
+                  };
+                },
+            ),
+          ),
+          Stream.map((json) => {
             const candidate = json.response?.candidates?.[0];
             const part = candidate?.content?.parts?.[0];
             return {

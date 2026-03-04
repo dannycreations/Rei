@@ -18,7 +18,7 @@ export interface Auth {
 interface InternalCredential {
   readonly providerId: string;
   readonly path: string;
-  readonly data: any;
+  readonly data: unknown;
 }
 
 export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<string>) =>
@@ -47,8 +47,8 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
             try: () => JSON.parse(content),
             catch: (e) => new Error(`Failed to parse auth file ${path}: ${e}`),
           });
-          const providerId = json.provider || json.providerId || 'unknown';
-          return { providerId, path, data: json } as InternalCredential;
+          const providerId = (json as Record<string, unknown>).provider || (json as Record<string, unknown>).providerId || 'unknown';
+          return { providerId: String(providerId), path, data: json };
         });
 
       const rawCredentials = yield* Effect.forEach(allPaths, loadInternal, {
@@ -68,7 +68,7 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
             save: (newData: T) =>
               Effect.gen(function* () {
                 const encoded = yield* Schema.encodeUnknown(schema)(newData);
-                const toSave = { ...cred.data, ...(encoded as any), provider: cred.providerId };
+                const toSave = { ...(cred.data as Record<string, unknown>), ...(encoded as Record<string, unknown>), provider: cred.providerId };
                 yield* fs.writeFileString(cred.path, JSON.stringify(toSave, null, 2)).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
 
                 yield* Ref.update(credentialsRef, (prev) => prev.map((p) => (p.path === cred.path ? { ...p, data: toSave } : p)));
@@ -103,7 +103,9 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
         Effect.gen(function* () {
           const all = yield* Ref.get(credentialsRef);
 
-          const existing = all.find((c) => (c.path === idOrPath || c.data.id === idOrPath) && c.providerId === providerId);
+          const existing = all.find(
+            (c) => (c.path === idOrPath || (c.data as Record<string, unknown>).id === idOrPath) && c.providerId === providerId,
+          );
 
           if (existing) {
             return yield* createSession(existing, schema);

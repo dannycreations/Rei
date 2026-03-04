@@ -62,16 +62,14 @@ export type AnthropicResponse = Schema.Schema.Type<typeof AnthropicResponse>;
 
 export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> = {
   requestToInternal: (req: AnthropicRequest): InternalRequest => {
-    const messages: Array<InternalRequest['messages'][number]> = [];
-
-    for (const msg of req.messages) {
+    const messages: InternalRequest['messages'] = req.messages.map((msg) => {
       if (typeof msg.content === 'string') {
-        messages.push({
+        return {
           role: msg.role,
           content: msg.content,
-        });
+        };
       } else {
-        messages.push({
+        return {
           role: msg.role,
           content: msg.content.map((c) => {
             if (c.type === 'text') {
@@ -80,14 +78,14 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
               return { type: 'image', image: c.source.data };
             }
           }),
-        });
+        };
       }
-    }
+    });
 
     return {
       model: req.model,
       system: req.system,
-      messages: messages as InternalRequest['messages'],
+      messages,
       maxTokens: req.max_tokens,
       temperature: req.temperature,
       topP: req.top_p,

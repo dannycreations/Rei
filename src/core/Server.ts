@@ -4,12 +4,9 @@ import { Effect, Option, Stream } from 'effect';
 import { anthropicRouter } from '../api/anthropic/Router.js';
 import { openAIRouter } from '../api/openai/Router.js';
 import { isLocalhost } from '../helpers/Server.js';
-import { Auth } from './Auth.js';
 import { ConfigTag } from './Config.js';
 import { ProviderRegistry } from './Provider.js';
 import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema.js';
-
-import type { FileSystem, HttpClient } from '@effect/platform';
 
 export const server = HttpRouter.empty.pipe(
   HttpRouter.mount('/openai', openAIRouter),
@@ -62,27 +59,27 @@ export const Dispatcher = Effect.gen(function* () {
 
         if (request.stream) {
           const stream = provider.stream(request);
-          return HttpServerResponse.stream(
-            stream.pipe(
-              Stream.map((chunk) => {
-                const mapped = handler.internalToStreamChunk(chunk);
-                return `data: ${JSON.stringify(mapped)}\n\n`;
-              }),
-              Stream.concat(Stream.make('data: [DONE]\n\n')),
-              Stream.encodeText,
-            ) as any,
-            {
-              headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                Connection: 'keep-alive',
-              },
-            },
+          const encodedStream = stream.pipe(
+            Stream.map((chunk) => {
+              const mapped = handler.internalToStreamChunk(chunk);
+              return `data: ${JSON.stringify(mapped)}\n\n`;
+            }),
+            Stream.concat(Stream.make('data: [DONE]\n\n')),
+            Stream.encodeText,
+            Stream.orDie,
           );
+
+          return HttpServerResponse.stream(encodedStream as Stream.Stream<Uint8Array, never, never>, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            },
+          });
         }
 
         const response = yield* provider.generate(request);
         return HttpServerResponse.json(handler.internalToResponse(response));
-      }) as Effect.Effect<HttpServerResponse.HttpServerResponse, Error, Auth | ProviderRegistry | HttpClient.HttpClient | FileSystem.FileSystem>,
+      }),
   };
 });

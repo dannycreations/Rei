@@ -39,7 +39,13 @@ export const OpenAIProvider: Provider = {
 
       const client = yield* HttpClient.HttpClient;
       const res = yield* Effect.flatMap(req, (r) => client.execute(r));
-      const json = (yield* res.json) as any;
+      const json = (yield* res.json) as {
+        id: string;
+        model: string;
+        choices: Array<{ message: { content: string } }>;
+        usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+        error?: { message?: string };
+      };
 
       if (json.error) {
         return yield* Effect.fail(new Error(json.error.message || 'OpenAI API Error'));
@@ -79,8 +85,10 @@ export const OpenAIProvider: Provider = {
           Stream.filter((line) => line.startsWith('data: ')),
           Stream.map((line) => line.slice(6).trim()),
           Stream.filter((line) => line.length > 0 && line !== '[DONE]'),
-          Stream.mapEffect((line) => Effect.try(() => JSON.parse(line))),
-          Stream.map((json: any) => ({
+          Stream.mapEffect((line) =>
+            Effect.try(() => JSON.parse(line) as { id: string; choices: Array<{ delta: { content?: string }; finish_reason?: string | null }> }),
+          ),
+          Stream.map((json) => ({
             id: json.id,
             content: json.choices[0]?.delta?.content || '',
             done: !!json.choices[0]?.finish_reason,

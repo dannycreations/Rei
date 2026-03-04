@@ -43,7 +43,7 @@ const run = (args: {
         Effect.catchAllCause((cause) => {
           const error = Cause.failureOption(cause).pipe(
             Option.filter((error) => {
-              const e = error as any;
+              const e = error as { _tag?: string; reason?: string };
               return e?._tag === 'SystemError' && e?.reason === 'EADDRINUSE';
             }),
           );
