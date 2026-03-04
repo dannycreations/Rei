@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Stream } from 'effect';
 
 import { AnthropicProvider } from '../providers/anthropic/Provider.js';
+import { GeminiCliProvider } from '../providers/gemini-cli/Provider.js';
 import { OpenAIProvider } from '../providers/openai/Provider.js';
 import { Config, ConfigTag } from './Config.js';
 import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema.js';
@@ -59,12 +60,9 @@ export const ProviderRegistryLive = Layer.effect(
     const config = yield* ConfigTag;
     const registry = new ProviderRegistryImpl(config);
 
-    // Initialize with env vars or config
-    const openAIKey = process.env.OPENAI_API_KEY ?? 'sk-dummy';
-    const anthropicKey = process.env.ANTHROPIC_API_KEY ?? 'sk-ant-dummy';
-
-    registry.register(new OpenAIProvider(openAIKey));
-    registry.register(new AnthropicProvider(anthropicKey));
+    registry.register(new OpenAIProvider());
+    registry.register(new AnthropicProvider());
+    registry.register(new GeminiCliProvider());
 
     return registry;
   }),
