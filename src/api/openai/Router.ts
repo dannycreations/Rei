@@ -11,6 +11,6 @@ export const openAIRouter = HttpRouter.empty.pipe(
       const dispatcher = yield* Dispatcher;
       const body = yield* HttpServerRequest.schemaBodyJson(OpenAIRequest);
       return yield* dispatcher.dispatch(body, OpenAIHandler);
-    }),
+    }).pipe(Effect.flatten),
   ),
 );

@@ -3,7 +3,7 @@ import { Effect, Schema, Stream } from 'effect';
 
 import { AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
-import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
+import { InternalRequest } from '../../core/Schema.js';
 
 export const OpenAIAuth = Schema.Struct({
   apiKey: Schema.String,
@@ -12,25 +12,34 @@ export const OpenAIAuth = Schema.Struct({
 
 export type OpenAIAuth = Schema.Schema.Type<typeof OpenAIAuth>;
 
-export class OpenAIProvider implements Provider {
-  public readonly id = 'openai';
-  public readonly name = 'OpenAI';
+const mapRequest = (request: InternalRequest) => ({
+  model: request.model,
+  messages: request.messages,
+  temperature: request.temperature,
+  max_tokens: request.maxTokens,
+  stream: request.stream,
+  top_p: request.topP,
+  stop: request.stop,
+});
 
-  public generate(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
-    const self = this;
-    return Effect.gen(function* () {
+export const OpenAIProvider: Provider = {
+  id: 'openai',
+  name: 'OpenAI',
+
+  generate: (request: InternalRequest) =>
+    Effect.gen(function* () {
       const auth = yield* AuthTag;
-      const session = yield* auth.next(self.id, OpenAIAuth);
+      const session = yield* auth.next('openai', OpenAIAuth);
       const { apiKey, baseURL } = session.data;
 
       const req = HttpClientRequest.post(`${baseURL}/chat/completions`).pipe(
         HttpClientRequest.setHeader('Authorization', `Bearer ${apiKey}`),
-        HttpClientRequest.bodyJson(self.mapRequest(request)),
+        HttpClientRequest.bodyJson(mapRequest(request)),
       );
 
       const client = yield* HttpClient.HttpClient;
       const res = yield* Effect.flatMap(req, (r) => client.execute(r));
-      const json: any = yield* res.json;
+      const json = (yield* res.json) as any;
 
       if (json.error) {
         return yield* Effect.fail(new Error(json.error.message || 'OpenAI API Error'));
@@ -47,20 +56,18 @@ export class OpenAIProvider implements Provider {
           totalTokens: json.usage.total_tokens,
         },
       };
-    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e))))) as Effect.Effect<InternalResponse, Error, never>;
-  }
+    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e))))),
 
-  public stream(request: InternalRequest): Stream.Stream<InternalStreamChunk, Error, never> {
-    const self = this;
-    return Stream.unwrap(
+  stream: (request: InternalRequest) =>
+    Stream.unwrap(
       Effect.gen(function* () {
         const auth = yield* AuthTag;
-        const session = yield* auth.next(self.id, OpenAIAuth);
+        const session = yield* auth.next('openai', OpenAIAuth);
         const { apiKey, baseURL } = session.data;
 
         const req = HttpClientRequest.post(`${baseURL}/chat/completions`).pipe(
           HttpClientRequest.setHeader('Authorization', `Bearer ${apiKey}`),
-          HttpClientRequest.bodyJson(self.mapRequest(request)),
+          HttpClientRequest.bodyJson(mapRequest(request)),
         );
 
         const client = yield* HttpClient.HttpClient;
@@ -80,18 +87,5 @@ export class OpenAIProvider implements Provider {
           })),
         );
       }),
-    ).pipe(Stream.catchAll((e) => Stream.fail(new Error(String(e))))) as Stream.Stream<InternalStreamChunk, Error, never>;
-  }
-
-  private mapRequest(request: InternalRequest) {
-    return {
-      model: request.model,
-      messages: request.messages,
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
-      stream: request.stream,
-      top_p: request.topP,
-      stop: request.stop,
-    };
-  }
-}
+    ).pipe(Stream.catchAll((e) => Stream.fail(new Error(String(e))))),
+};

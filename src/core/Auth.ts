@@ -27,20 +27,18 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const config = yield* ConfigTag;
-      const filePathsSet = new Set<string>(paths);
 
-      for (const dir of dirs) {
-        try {
-          const files = yield* fs.readDirectory(dir);
-          for (const file of files) {
-            if (file.endsWith('.json')) {
-              filePathsSet.add(`${dir}/${file}`);
-            }
-          }
-        } catch (e) {
-          yield* Effect.logWarning(`Failed to read directory ${dir}: ${e}`);
-        }
-      }
+      const scanDirs = Effect.forEach(
+        dirs,
+        (dir) =>
+          fs.readDirectory(dir).pipe(
+            Effect.map((files) => files.filter((f) => f.endsWith('.json')).map((f) => `${dir}/${f}`)),
+            Effect.catchAll((e) => Effect.logWarning(`Failed to read directory ${dir}: ${e}`).pipe(Effect.as([] as string[]))),
+          ),
+        { concurrency: 'inherit' },
+      ).pipe(Effect.map((paths) => paths.flat()));
+
+      const allPaths = yield* scanDirs.pipe(Effect.map((dirPaths) => Array.from(new Set([...paths, ...dirPaths]))));
 
       const loadInternal = (path: string) =>
         Effect.gen(function* () {
@@ -53,7 +51,7 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
           return { providerId, path, data: json } as InternalCredential;
         });
 
-      const rawCredentials = yield* Effect.forEach(Array.from(filePathsSet), loadInternal, {
+      const rawCredentials = yield* Effect.forEach(allPaths, loadInternal, {
         concurrency: 'inherit',
       });
 
@@ -105,21 +103,20 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
         Effect.gen(function* () {
           const all = yield* Ref.get(credentialsRef);
 
-          // Try to find by path or some internal ID (if we added it)
-          let cred = all.find((c) => (c.path === idOrPath || c.data.id === idOrPath) && c.providerId === providerId);
+          const existing = all.find((c) => (c.path === idOrPath || c.data.id === idOrPath) && c.providerId === providerId);
 
-          if (!cred) {
-            // If not found in memory, try to load from disk directly (it might be a new path)
-            try {
-              cred = yield* loadInternal(idOrPath);
-              if (cred.providerId !== providerId) {
-                return yield* Effect.fail(new Error(`Credential at ${idOrPath} belongs to ${cred.providerId}, not ${providerId}`));
-              }
-              yield* Ref.update(credentialsRef, (prev) => [...prev, cred!]);
-            } catch (e) {
-              return yield* Effect.fail(new Error(`Failed to load credential for ${providerId} at ${idOrPath}: ${e}`));
-            }
+          if (existing) {
+            return yield* createSession(existing, schema);
           }
+
+          const cred = yield* loadInternal(idOrPath).pipe(
+            Effect.filterOrFail(
+              (c) => c.providerId === providerId,
+              (c) => new Error(`Credential at ${idOrPath} belongs to ${c.providerId}, not ${providerId}`),
+            ),
+            Effect.tap((c) => Ref.update(credentialsRef, (prev) => [...prev, c])),
+            Effect.catchAll((e) => Effect.fail(new Error(`Failed to load credential for ${providerId} at ${idOrPath}: ${e}`))),
+          );
 
           return yield* createSession(cred, schema);
         });

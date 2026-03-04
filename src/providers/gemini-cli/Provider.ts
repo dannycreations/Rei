@@ -1,12 +1,11 @@
-import { readFile } from 'fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { HttpClient, HttpClientRequest } from '@effect/platform';
+import { FileSystem, HttpClient, HttpClientRequest } from '@effect/platform';
 import { Effect, Schema, Stream } from 'effect';
 
 import { Auth, AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
-import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
+import { InternalRequest } from '../../core/Schema.js';
 
 import type { AuthSession } from '../../core/Auth.js';
 
@@ -25,17 +24,158 @@ export const OAuthCredentials = Schema.Struct({
 
 export type OAuthCredentials = Schema.Schema.Type<typeof OAuthCredentials>;
 
-export class GeminiCliProvider implements Provider {
-  public readonly id = 'gemini-cli';
-  public readonly name = 'Gemini CLI';
+const mapRequest = (request: InternalRequest) => {
+  const systemInstruction = request.system
+    ? {
+        role: 'user',
+        parts: [{ text: request.system }],
+      }
+    : undefined;
 
-  public generate(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
-    const self = this;
-    return Effect.gen(function* () {
-      const { session, credentials } = yield* self.ensureAuthenticated();
-      const projectId = yield* self.ensureProjectId(session);
+  const contents = request.messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => {
+      let parts: any[] = [];
+      if (typeof m.content === 'string') {
+        parts = [{ text: m.content }];
+      } else {
+        parts = m.content.map((c) => {
+          if (c.type === 'text') return { text: c.text };
+          if (c.type === 'image') {
+            return { text: `[Image: ${c.image}]` };
+          }
+          return { text: '' };
+        });
+      }
+      return {
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts,
+      };
+    });
 
-      const body = self.mapRequest(request);
+  return {
+    contents,
+    systemInstruction,
+    generationConfig: {
+      temperature: request.temperature,
+      maxOutputTokens: request.maxTokens,
+      topP: request.topP,
+      stopSequences: request.stop,
+    },
+  };
+};
+
+const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<string, Error, HttpClient.HttpClient | FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (session.data.project_id) return session.data.project_id;
+
+    const fs = yield* FileSystem.FileSystem;
+    try {
+      const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env'));
+      const match = envContent.match(/GOOGLE_CLOUD_PROJECT=["']?([^"'\\\r\n\s]+)["']?/);
+      if (match) {
+        const id = match[1].trim();
+        yield* session.save({ ...session.data, project_id: id });
+        return id;
+      }
+    } catch {}
+
+    const client = yield* HttpClient.HttpClient;
+    const loadReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`).pipe(
+      HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
+      HttpClientRequest.bodyJson({
+        metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
+      }),
+    );
+
+    const loadRes = yield* Effect.flatMap(loadReq, (r) => client.execute(r));
+    const loadJson: any = yield* loadRes.json;
+
+    let projectId = 'dummy-project';
+
+    if (loadJson.cloudaicompanionProject) {
+      projectId = loadJson.cloudaicompanionProject;
+    } else {
+      const tierId = loadJson.allowedTiers?.find((t: any) => t.id === 'free-tier' || (t as any).isDefault)?.id || 'free-tier';
+      const onboardReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:onboardUser`).pipe(
+        HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
+        HttpClientRequest.bodyJson({
+          tierId,
+          metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
+        }),
+      );
+
+      const onboardRes = yield* Effect.flatMap(onboardReq, (r) => client.execute(r));
+      const onboardJson: any = yield* onboardRes.json;
+      projectId = onboardJson.response?.cloudaicompanionProject?.id || 'dummy-project';
+    }
+
+    yield* session.save({ ...session.data, project_id: projectId });
+    return projectId;
+  }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
+
+const ensureAuthenticated = (): Effect.Effect<
+  { session: AuthSession<OAuthCredentials>; credentials: OAuthCredentials },
+  Error,
+  HttpClient.HttpClient | Auth | FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const auth = yield* AuthTag;
+    const fs = yield* FileSystem.FileSystem;
+    const session = yield* auth.next('gemini-cli', OAuthCredentials).pipe(
+      Effect.catchAll(() =>
+        Effect.gen(function* () {
+          let oauthPath: string = '';
+          try {
+            const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env'));
+            const match = envContent.match(/GOOGLE_OAUTH_PATH=["']?([^"'\\\r\n\s]+)["']?/);
+            if (match) oauthPath = match[1].trim();
+          } catch {}
+          const credPath = oauthPath || OAUTH_DEFAULT_PATH;
+          return yield* auth.load('gemini-cli', credPath, OAuthCredentials);
+        }),
+      ),
+    );
+
+    let credentials = session.data;
+
+    if (credentials.expiry_date - 60_000 < Date.now()) {
+      const client = yield* HttpClient.HttpClient;
+      const refreshReq = HttpClientRequest.post('https://oauth2.googleapis.com/token').pipe(
+        HttpClientRequest.bodyJson({
+          client_id: OAUTH_CLIENT_ID,
+          client_secret: OAUTH_CLIENT_SECRET,
+          refresh_token: credentials.refresh_token,
+          grant_type: 'refresh_token',
+        }),
+      );
+      const res = yield* Effect.flatMap(refreshReq, (r) => client.execute(r));
+      const json: any = yield* res.json;
+
+      credentials = {
+        ...credentials,
+        access_token: json.access_token,
+        refresh_token: json.refresh_token || credentials.refresh_token,
+        token_type: json.token_type || 'Bearer',
+        expiry_date: Date.now() + (json.expires_in || 3600) * 1000,
+      };
+
+      yield* session.save(credentials);
+    }
+
+    return { session, credentials };
+  }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
+
+export const GeminiCliProvider: Provider = {
+  id: 'gemini-cli',
+  name: 'Gemini CLI',
+
+  generate: (request: InternalRequest) =>
+    Effect.gen(function* () {
+      const { session, credentials } = yield* ensureAuthenticated();
+      const projectId = yield* ensureProjectId(session);
+
+      const body = mapRequest(request);
       const req = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:generateContent`).pipe(
         HttpClientRequest.setHeader('Authorization', `Bearer ${credentials.access_token}`),
         HttpClientRequest.bodyJson({
@@ -69,17 +209,15 @@ export class GeminiCliProvider implements Provider {
           totalTokens: (usage.promptTokenCount ?? 0) + (usage.candidatesTokenCount ?? 0),
         },
       };
-    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e))))) as Effect.Effect<InternalResponse, Error, never>;
-  }
+    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e))))),
 
-  public stream(request: InternalRequest): Stream.Stream<InternalStreamChunk, Error, never> {
-    const self = this;
-    return Stream.unwrap(
+  stream: (request: InternalRequest) =>
+    Stream.unwrap(
       Effect.gen(function* () {
-        const { session, credentials } = yield* self.ensureAuthenticated();
-        const projectId = yield* self.ensureProjectId(session);
+        const { session, credentials } = yield* ensureAuthenticated();
+        const projectId = yield* ensureProjectId(session);
 
-        const body = self.mapRequest(request);
+        const body = mapRequest(request);
         const req = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:streamGenerateContent`).pipe(
           HttpClientRequest.setHeader('Authorization', `Bearer ${credentials.access_token}`),
           HttpClientRequest.appendUrlParam('alt', 'sse'),
@@ -111,149 +249,5 @@ export class GeminiCliProvider implements Provider {
           }),
         );
       }),
-    ).pipe(Stream.catchAll((e) => Stream.fail(new Error(String(e))))) as Stream.Stream<InternalStreamChunk, Error, never>;
-  }
-
-  private mapRequest(request: InternalRequest) {
-    const systemInstruction = request.system
-      ? {
-          role: 'user',
-          parts: [{ text: request.system }],
-        }
-      : undefined;
-
-    const contents = request.messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => {
-        let parts: any[] = [];
-        if (typeof m.content === 'string') {
-          parts = [{ text: m.content }];
-        } else {
-          parts = m.content.map((c) => {
-            if (c.type === 'text') return { text: c.text };
-            if (c.type === 'image') {
-              return { text: `[Image: ${c.image}]` };
-            }
-            return { text: '' };
-          });
-        }
-        return {
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts,
-        };
-      });
-
-    return {
-      contents,
-      systemInstruction,
-      generationConfig: {
-        temperature: request.temperature,
-        maxOutputTokens: request.maxTokens,
-        topP: request.topP,
-        stopSequences: request.stop,
-      },
-    };
-  }
-
-  private ensureAuthenticated(): Effect.Effect<
-    { session: AuthSession<OAuthCredentials>; credentials: OAuthCredentials },
-    Error,
-    HttpClient.HttpClient | Auth
-  > {
-    const self = this;
-    return Effect.gen(function* () {
-      const auth = yield* AuthTag;
-      let session: AuthSession<OAuthCredentials>;
-
-      try {
-        session = yield* auth.next(self.id, OAuthCredentials);
-      } catch {
-        let oauthPath: string = '';
-        try {
-          const envContent = yield* Effect.promise(() => readFile(join(dirname(OAUTH_DEFAULT_PATH), '.env'), 'utf-8'));
-          const match = envContent.match(/GOOGLE_OAUTH_PATH=["']?([^"'\\\r\n\s]+)["']?/);
-          if (match) oauthPath = match[1].trim();
-        } catch {}
-        const credPath = oauthPath || OAUTH_DEFAULT_PATH;
-        session = yield* auth.load(self.id, credPath, OAuthCredentials);
-      }
-
-      let credentials = session.data;
-
-      if (credentials.expiry_date - 60_000 < Date.now()) {
-        const client = yield* HttpClient.HttpClient;
-        const refreshReq = HttpClientRequest.post('https://oauth2.googleapis.com/token').pipe(
-          HttpClientRequest.bodyJson({
-            client_id: OAUTH_CLIENT_ID,
-            client_secret: OAUTH_CLIENT_SECRET,
-            refresh_token: credentials.refresh_token,
-            grant_type: 'refresh_token',
-          }),
-        );
-        const res = yield* Effect.flatMap(refreshReq, (r) => client.execute(r));
-        const json: any = yield* res.json;
-
-        credentials = {
-          ...credentials,
-          access_token: json.access_token,
-          refresh_token: json.refresh_token || credentials.refresh_token,
-          token_type: json.token_type || 'Bearer',
-          expiry_date: Date.now() + (json.expires_in || 3600) * 1000,
-        };
-
-        yield* session.save(credentials);
-      }
-
-      return { session, credentials };
-    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
-  }
-
-  private ensureProjectId(session: AuthSession<OAuthCredentials>): Effect.Effect<string, Error, HttpClient.HttpClient> {
-    return Effect.gen(function* () {
-      if (session.data.project_id) return session.data.project_id;
-
-      try {
-        const envContent = yield* Effect.promise(() => readFile(join(dirname(OAUTH_DEFAULT_PATH), '.env'), 'utf-8'));
-        const match = envContent.match(/GOOGLE_CLOUD_PROJECT=["']?([^"'\\\r\n\s]+)["']?/);
-        if (match) {
-          const id = match[1].trim();
-          yield* session.save({ ...session.data, project_id: id });
-          return id;
-        }
-      } catch {}
-
-      const client = yield* HttpClient.HttpClient;
-      const loadReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`).pipe(
-        HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
-        HttpClientRequest.bodyJson({
-          metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
-        }),
-      );
-
-      const loadRes = yield* Effect.flatMap(loadReq, (r) => client.execute(r));
-      const loadJson: any = yield* loadRes.json;
-
-      let projectId = 'dummy-project';
-
-      if (loadJson.cloudaicompanionProject) {
-        projectId = loadJson.cloudaicompanionProject;
-      } else {
-        const tierId = loadJson.allowedTiers?.find((t: any) => t.id === 'free-tier' || (t as any).isDefault)?.id || 'free-tier';
-        const onboardReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:onboardUser`).pipe(
-          HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
-          HttpClientRequest.bodyJson({
-            tierId,
-            metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
-          }),
-        );
-
-        const onboardRes = yield* Effect.flatMap(onboardReq, (r) => client.execute(r));
-        const onboardJson: any = yield* onboardRes.json;
-        projectId = onboardJson.response?.cloudaicompanionProject?.id || 'dummy-project';
-      }
-
-      yield* session.save({ ...session.data, project_id: projectId });
-      return projectId;
-    }).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
-  }
-}
+    ).pipe(Stream.catchAll((e) => Stream.fail(new Error(String(e))))),
+};

@@ -11,6 +11,6 @@ export const anthropicRouter = HttpRouter.empty.pipe(
       const dispatcher = yield* Dispatcher;
       const body = yield* HttpServerRequest.schemaBodyJson(AnthropicRequest);
       return yield* dispatcher.dispatch(body, AnthropicHandler);
-    }),
+    }).pipe(Effect.flatten),
   ),
 );

@@ -3,10 +3,13 @@ import { Effect, Option, Stream } from 'effect';
 
 import { anthropicRouter } from '../api/anthropic/Router.js';
 import { openAIRouter } from '../api/openai/Router.js';
-import { ProviderRegistry } from '../core/Provider.js';
-import { InternalRequest, InternalResponse, InternalStreamChunk } from '../core/Schema.js';
 import { isLocalhost } from '../helpers/Server.js';
+import { Auth } from './Auth.js';
 import { ConfigTag } from './Config.js';
+import { ProviderRegistry } from './Provider.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema.js';
+
+import type { FileSystem, HttpClient } from '@effect/platform';
 
 export const server = HttpRouter.empty.pipe(
   HttpRouter.mount('/openai', openAIRouter),
@@ -50,39 +53,36 @@ export const Dispatcher = Effect.gen(function* () {
 
   return {
     dispatch: <R, T>(body: R, handler: ApiHandler<R, T>) =>
-      Effect.flatMap(
-        Effect.gen(function* () {
-          const internalReq = handler.requestToInternal(body);
-          const mapping = registry.mapModel(internalReq.model);
-          const provider = yield* registry.getProvider(mapping.with ?? mapping.to);
+      Effect.gen(function* () {
+        const internalReq = handler.requestToInternal(body);
+        const mapping = registry.mapModel(internalReq.model);
+        const provider = yield* registry.getProvider(mapping.with ?? mapping.to);
 
-          const request = { ...internalReq, model: mapping.to };
+        const request = { ...internalReq, model: mapping.to };
 
-          if (request.stream) {
-            const stream = provider.stream(request);
-            return HttpServerResponse.stream(
-              stream.pipe(
-                Stream.map((chunk) => {
-                  const mapped = handler.internalToStreamChunk(chunk);
-                  return `data: ${JSON.stringify(mapped)}\n\n`;
-                }),
-                Stream.concat(Stream.make('data: [DONE]\n\n')),
-                Stream.encodeText,
-              ),
-              {
-                headers: {
-                  'Content-Type': 'text/event-stream',
-                  'Cache-Control': 'no-cache',
-                  Connection: 'keep-alive',
-                },
+        if (request.stream) {
+          const stream = provider.stream(request);
+          return HttpServerResponse.stream(
+            stream.pipe(
+              Stream.map((chunk) => {
+                const mapped = handler.internalToStreamChunk(chunk);
+                return `data: ${JSON.stringify(mapped)}\n\n`;
+              }),
+              Stream.concat(Stream.make('data: [DONE]\n\n')),
+              Stream.encodeText,
+            ) as any,
+            {
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                Connection: 'keep-alive',
               },
-            );
-          }
+            },
+          );
+        }
 
-          const response = yield* provider.generate(request);
-          return HttpServerResponse.json(handler.internalToResponse(response));
-        }),
-        (res) => Effect.succeed(res),
-      ) as Effect.Effect<HttpServerResponse.HttpServerResponse, Error, never>,
+        const response = yield* provider.generate(request);
+        return HttpServerResponse.json(handler.internalToResponse(response));
+      }) as Effect.Effect<HttpServerResponse.HttpServerResponse, Error, Auth | ProviderRegistry | HttpClient.HttpClient | FileSystem.FileSystem>,
   };
 });

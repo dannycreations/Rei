@@ -34,10 +34,11 @@ const run = (args: {
           Layer.provide(NodeHttpServer.layer(() => createServer(), { port })),
           Layer.provide(ProviderRegistryLive),
           Layer.provide(NodeHttpClient.layer),
-          Layer.provide(ConfigLive(configPath)),
           Layer.provide(AuthLive(args.options.auth, args.options.auth_dir)),
         ),
       ).pipe(
+        Effect.provide(ConfigLive(configPath)),
+        Effect.provide(NodeContext.layer),
         Effect.tap(() => Effect.log(`Rei Proxies listening on http://localhost:${port}`)),
         Effect.catchAllCause((cause) => {
           const error = Cause.failureOption(cause).pipe(
@@ -51,12 +52,9 @@ const run = (args: {
             return startServer(port + 1);
           }
 
-          return Effect.failCause(cause);
+          return Effect.failCause(cause).pipe(Effect.logError);
         }),
-        Effect.provide(ConfigLive(configPath)),
-        Effect.provide(NodeContext.layer),
-        Effect.catchAllCause((cause) => Effect.logError(cause)),
-      ) as Effect.Effect<void, never, never>;
+      );
 
     yield* startServer(args.options.port);
   });
