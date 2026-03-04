@@ -9,7 +9,7 @@ import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema
 export interface Provider {
   readonly id: string;
   readonly name: string;
-  readonly execute: (request: InternalRequest) => Effect.Effect<InternalResponse, Error, never>;
+  readonly generate: (request: InternalRequest) => Effect.Effect<InternalResponse, Error, never>;
   readonly stream: (request: InternalRequest) => Stream.Stream<InternalStreamChunk, Error, never>;
 }
 

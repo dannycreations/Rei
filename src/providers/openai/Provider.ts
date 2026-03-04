@@ -16,7 +16,7 @@ export class OpenAIProvider implements Provider {
   public readonly id = 'openai';
   public readonly name = 'OpenAI';
 
-  public execute(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
+  public generate(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
     const self = this;
     return Effect.gen(function* () {
       const auth = yield* AuthTag;

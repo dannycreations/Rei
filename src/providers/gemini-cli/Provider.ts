@@ -29,7 +29,7 @@ export class GeminiCliProvider implements Provider {
   public readonly id = 'gemini-cli';
   public readonly name = 'Gemini CLI';
 
-  public execute(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
+  public generate(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
     const self = this;
     return Effect.gen(function* () {
       const { session, credentials } = yield* self.ensureAuthenticated();

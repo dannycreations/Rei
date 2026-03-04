@@ -79,7 +79,7 @@ export const Dispatcher = Effect.gen(function* () {
             );
           }
 
-          const response = yield* provider.execute(request);
+          const response = yield* provider.generate(request);
           return HttpServerResponse.json(handler.internalToResponse(response));
         }),
         (res) => Effect.succeed(res),

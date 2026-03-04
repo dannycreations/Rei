@@ -16,7 +16,7 @@ export class AnthropicProvider implements Provider {
   public readonly id = 'anthropic';
   public readonly name = 'Anthropic';
 
-  public execute(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
+  public generate(request: InternalRequest): Effect.Effect<InternalResponse, Error, never> {
     const self = this;
     return Effect.gen(function* () {
       const auth = yield* AuthTag;
