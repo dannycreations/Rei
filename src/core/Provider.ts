@@ -18,7 +18,7 @@ export const Provider = Context.GenericTag<Provider>('@rei/core/Provider');
 export interface ProviderRegistry {
   readonly register: (provider: Provider) => void;
   readonly getProvider: (modelId: string) => Effect.Effect<Provider, Error, never>;
-  readonly mapModel: (modelId: string) => string;
+  readonly mapModel: (modelId: string) => { to: string; with?: string };
 }
 
 export const ProviderRegistry = Context.GenericTag<ProviderRegistry>('@rei/core/ProviderRegistry');
@@ -32,15 +32,15 @@ export class ProviderRegistryImpl implements ProviderRegistry {
     this.providers.set(provider.id, provider);
   }
 
-  public mapModel(modelId: string): string {
+  public mapModel(modelId: string): { to: string; with?: string } {
     const mappings = this.config['model-mappings'];
     for (const mapping of mappings) {
       const regex = new RegExp(`^${mapping.from.replace(/\*/g, '.*')}$`);
       if (regex.test(modelId)) {
-        return mapping.to;
+        return { to: mapping.to, with: mapping.with };
       }
     }
-    return modelId;
+    return { to: modelId };
   }
 
   public getProvider(modelId: string): Effect.Effect<Provider, Error, never> {

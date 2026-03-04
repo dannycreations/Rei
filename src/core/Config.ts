@@ -11,6 +11,7 @@ export const parseYaml = (content: string) =>
 export const ModelMapping = Schema.Struct({
   from: Schema.String,
   to: Schema.String,
+  with: Schema.optional(Schema.String),
 });
 
 export const RoutingStrategy = Schema.Literal('round-robin', 'fill-first');

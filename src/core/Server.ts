@@ -53,10 +53,10 @@ export const Dispatcher = Effect.gen(function* () {
       Effect.flatMap(
         Effect.gen(function* () {
           const internalReq = handler.requestToInternal(body);
-          const mappedModel = registry.mapModel(internalReq.model);
-          const provider = yield* registry.getProvider(mappedModel);
+          const mapping = registry.mapModel(internalReq.model);
+          const provider = yield* registry.getProvider(mapping.with ?? mapping.to);
 
-          const request = { ...internalReq, model: mappedModel };
+          const request = { ...internalReq, model: mapping.to };
 
           if (request.stream) {
             const stream = provider.stream(request);
