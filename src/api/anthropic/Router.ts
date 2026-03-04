@@ -2,38 +2,20 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from '@effect/platf
 import { Effect } from 'effect';
 
 import { ProviderRegistry } from '../../core/Provider.js';
-import { InternalRequest } from '../../core/Schema.js';
+import { AnthropicRequest, internalToResponse, requestToInternal } from './Handler.js';
 
 export const anthropicRouter = HttpRouter.empty.pipe(
   HttpRouter.post(
     '/v1/messages',
     Effect.gen(function* (_) {
       const registry = yield* _(ProviderRegistry);
-      const body = yield* _(HttpServerRequest.schemaBodyJson(InternalRequest));
+      const body = yield* _(HttpServerRequest.schemaBodyJson(AnthropicRequest));
 
       const provider = yield* _(registry.getProvider(body.model));
-      const response = yield* _(provider.execute(body));
+      const internalRequest = requestToInternal(body);
+      const response = yield* _(provider.execute(internalRequest));
 
-      return yield* _(
-        HttpServerResponse.json({
-          id: response.id,
-          type: 'message',
-          role: response.role,
-          content: [
-            {
-              type: 'text',
-              text: response.content,
-            },
-          ],
-          model: response.model,
-          stop_reason: 'end_turn',
-          stop_sequence: null,
-          usage: {
-            input_tokens: response.usage.promptTokens,
-            output_tokens: response.usage.completionTokens,
-          },
-        }),
-      );
+      return yield* _(HttpServerResponse.json(internalToResponse(response)));
     }),
   ),
 );
