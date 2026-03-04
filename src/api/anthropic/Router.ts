@@ -9,7 +9,7 @@ export const anthropicRouter = HttpRouter.empty.pipe(
     '/v1/messages',
     Effect.gen(function* (_) {
       const registry = yield* _(ProviderRegistry);
-      const body: any = yield* _(HttpServerRequest.schemaBodyJson(InternalRequest));
+      const body = yield* _(HttpServerRequest.schemaBodyJson(InternalRequest));
 
       const provider = yield* _(registry.getProvider(body.model));
       const response = yield* _(provider.execute(body));
