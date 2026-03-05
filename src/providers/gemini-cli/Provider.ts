@@ -1,11 +1,12 @@
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { FileSystem, HttpClient, HttpClientRequest } from '@effect/platform';
-import { Effect, Schema, Stream } from 'effect';
+import { Effect, Option, Schema, Stream } from 'effect';
 
 import { Auth, AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
 import { InternalRequest } from '../../core/Schema.js';
+import { streamSSE } from '../../helpers/Server.js';
 
 import type { AuthSession } from '../../core/Auth.js';
 
@@ -34,24 +35,13 @@ const mapRequest = (request: InternalRequest) => {
 
   const contents = request.messages
     .filter((m) => m.role !== 'system')
-    .map((m) => {
-      let parts: Array<{ text: string }> = [];
-      if (typeof m.content === 'string') {
-        parts = [{ text: m.content }];
-      } else {
-        parts = m.content.map((c) => {
-          if (c.type === 'text') return { text: c.text };
-          if (c.type === 'image') {
-            return { text: `[Image: ${c.image}]` };
-          }
-          return { text: '' };
-        });
-      }
-      return {
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts,
-      };
-    });
+    .map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts:
+        typeof m.content === 'string'
+          ? [{ text: m.content }]
+          : m.content.map((c) => (c.type === 'text' ? { text: c.text } : { text: `[Image: ${c.image}]` })),
+    }));
 
   return {
     contents,
@@ -71,11 +61,12 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
 
     const fs = yield* FileSystem.FileSystem;
     const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env')).pipe(
-      Effect.map((s) => s as string | undefined),
-      Effect.catchAll(() => Effect.succeed(undefined)),
+      Effect.map(Option.some),
+      Effect.catchAll(() => Effect.succeed(Option.none())),
     );
-    if (envContent !== undefined) {
-      const match = envContent.match(/GOOGLE_CLOUD_PROJECT=[\"']?([^\"'\\r\\n\\s]+)[\"']?/);
+
+    if (Option.isSome(envContent)) {
+      const match = envContent.value.match(/GOOGLE_CLOUD_PROJECT=[\"']?([^\"'\\r\\n\\s;]+)[\"']?/);
       if (match) {
         const id = match[1].trim();
         yield* session.save({ ...session.data, project_id: id });
@@ -97,11 +88,9 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
       allowedTiers?: Array<{ id: string; isDefault?: boolean }>;
     };
 
-    let projectId: string | undefined;
+    let projectId = loadJson.cloudaicompanionProject;
 
-    if (loadJson.cloudaicompanionProject) {
-      projectId = loadJson.cloudaicompanionProject;
-    } else {
+    if (!projectId) {
       const tierId = loadJson.allowedTiers?.find((t) => t.id === 'free-tier' || t.isDefault)?.id || 'free-tier';
       const onboardReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:onboardUser`).pipe(
         HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
@@ -276,33 +265,20 @@ export const GeminiCliProvider: Provider = {
         const client = yield* HttpClient.HttpClient;
         const res = yield* Effect.flatMap(req, (r) => client.execute(r));
 
-        return res.stream.pipe(
-          Stream.decodeText(),
-          Stream.splitLines,
-          Stream.filter((line) => line.startsWith('data: ')),
-          Stream.map((line) => line.slice(6).trim()),
-          Stream.filter((line) => line.length > 0),
-          Stream.mapEffect((line) =>
-            Effect.try({
-              try: () =>
-                JSON.parse(line) as {
-                  response?: {
-                    candidates?: Array<{
-                      content?: { parts?: Array<{ text?: string }> };
-                      finishReason?: string | null;
-                    }>;
-                    responseId?: string;
-                  };
-                },
-              catch: (e) => {
-                return new Error(`JSON parse error: ${String(e)} line: ${line}`);
-              },
-            }),
-          ),
+        return streamSSE(res.stream).pipe(
           Stream.flatMap((json) => {
-            const candidate = json.response?.candidates?.[0];
+            const j = json as {
+              response?: {
+                candidates?: Array<{
+                  content?: { parts?: Array<{ text?: string }> };
+                  finishReason?: string | null;
+                }>;
+                responseId?: string;
+              };
+            };
+            const candidate = j.response?.candidates?.[0];
             const parts = candidate?.content?.parts || [];
-            const responseId = json.response?.responseId || '';
+            const responseId = j.response?.responseId || '';
             const done = !!candidate?.finishReason;
 
             const chunks = parts

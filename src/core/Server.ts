@@ -13,6 +13,7 @@ export const server = HttpRouter.empty.pipe(
     HttpMiddleware.make((httpApp) =>
       Effect.gen(function* () {
         const config = yield* ConfigTag;
+        const authKeys = new Set(config['auth-keys']);
         const request = yield* HttpServerRequest.HttpServerRequest;
         const remoteAddress = Option.getOrElse(request.remoteAddress, () => '');
 
@@ -27,7 +28,7 @@ export const server = HttpRouter.empty.pipe(
           return yield* HttpServerResponse.json({ error: 'Unauthorized: Missing or invalid Bearer token' }, { status: 401 });
         }
 
-        if (!config['auth-keys'].includes(authHeader.substring(7))) {
+        if (!authKeys.has(authHeader.substring(7))) {
           return yield* HttpServerResponse.json({ error: 'Unauthorized: Invalid auth key' }, { status: 401 });
         }
 

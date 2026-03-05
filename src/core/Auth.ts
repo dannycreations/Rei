@@ -55,31 +55,57 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
         concurrency: 'inherit',
       });
 
+      const credentialsByProvider = new Map<string, InternalCredential[]>();
+      for (const cred of rawCredentials) {
+        const list = credentialsByProvider.get(cred.providerId) || [];
+        list.push(cred);
+        credentialsByProvider.set(cred.providerId, list);
+      }
+
       const credentialsRef = yield* Ref.make(rawCredentials);
+      const credentialsByProviderRef = yield* Ref.make(credentialsByProvider);
       const indicesRef = yield* Ref.make<Record<string, number>>({});
       const strategy = config['routing-strategy'];
 
+      const updateCredentials = (cred: InternalCredential, toSave: unknown) =>
+        Effect.all([
+          Ref.update(credentialsRef, (prev) => prev.map((p) => (p.path === cred.path ? { ...p, data: toSave } : p))),
+          Ref.update(credentialsByProviderRef, (prev) => {
+            const next = new Map(prev);
+            const list = next.get(cred.providerId) || [];
+            next.set(
+              cred.providerId,
+              list.map((p) => (p.path === cred.path ? { ...p, data: toSave } : p)),
+            );
+            return next;
+          }),
+        ]);
+
       const createSession = <T, I>(cred: InternalCredential, schema: Schema.Schema<T, I>): Effect.Effect<AuthSession<T>, Error> =>
         Effect.gen(function* () {
-          const decoded = yield* Schema.decodeUnknown(schema)(cred.data);
+          const decoded = yield* Schema.decodeUnknown(schema)(cred.data).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
 
           return {
             data: decoded,
             save: (newData: T) =>
               Effect.gen(function* () {
-                const encoded = yield* Schema.encodeUnknown(schema)(newData);
-                const toSave = { ...(cred.data as Record<string, unknown>), ...(encoded as Record<string, unknown>), provider: cred.providerId };
+                const encoded = yield* Schema.encodeUnknown(schema)(newData).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
+                const toSave = {
+                  ...(cred.data as Record<string, unknown>),
+                  ...(encoded as Record<string, unknown>),
+                  provider: cred.providerId,
+                };
                 yield* fs.writeFileString(cred.path, JSON.stringify(toSave, null, 2)).pipe(Effect.catchAll((e) => Effect.fail(new Error(String(e)))));
 
-                yield* Ref.update(credentialsRef, (prev) => prev.map((p) => (p.path === cred.path ? { ...p, data: toSave } : p)));
+                yield* updateCredentials(cred, toSave);
               }),
           };
         });
 
       const next = <T, I>(providerId: string, schema: Schema.Schema<T, I>): Effect.Effect<AuthSession<T>, Error> =>
         Effect.gen(function* () {
-          const all = yield* Ref.get(credentialsRef);
-          const filtered = all.filter((c) => c.providerId === providerId);
+          const byProvider = yield* Ref.get(credentialsByProviderRef);
+          const filtered = byProvider.get(providerId) || [];
 
           if (filtered.length === 0) {
             return yield* Effect.fail(new Error(`No credentials available for provider: ${providerId}`));
@@ -117,7 +143,17 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
               (c) => c.providerId === providerId,
               (c) => new Error(`Credential at ${idOrPath} belongs to ${c.providerId}, not ${providerId}`),
             ),
-            Effect.tap((c) => Ref.update(credentialsRef, (prev) => [...prev, c])),
+            Effect.tap((c) =>
+              Effect.all([
+                Ref.update(credentialsRef, (prev) => [...prev, c]),
+                Ref.update(credentialsByProviderRef, (prev) => {
+                  const next = new Map(prev);
+                  const list = next.get(c.providerId) || [];
+                  next.set(c.providerId, [...list, c]);
+                  return next;
+                }),
+              ]),
+            ),
             Effect.catchAll((e) => Effect.fail(new Error(`Failed to load credential for ${providerId} at ${idOrPath}: ${e}`))),
           );
 

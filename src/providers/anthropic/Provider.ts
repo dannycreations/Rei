@@ -1,9 +1,10 @@
 import { HttpClient, HttpClientRequest } from '@effect/platform';
-import { Effect, Schema, Stream } from 'effect';
+import { Effect, Option, Schema, Stream } from 'effect';
 
 import { AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
 import { InternalRequest } from '../../core/Schema.js';
+import { streamSSE } from '../../helpers/Server.js';
 
 export const AnthropicAuth = Schema.Struct({
   apiKey: Schema.String,
@@ -83,19 +84,17 @@ export const AnthropicProvider: Provider = {
         const client = yield* HttpClient.HttpClient;
         const res = yield* Effect.flatMap(req, (r) => client.execute(r));
 
-        return res.stream.pipe(
-          Stream.decodeText(),
-          Stream.splitLines,
-          Stream.filter((line) => line.startsWith('data: ')),
-          Stream.map((line) => line.slice(6).trim()),
-          Stream.filter((line) => line.length > 0),
-          Stream.mapEffect((line) => Effect.try(() => JSON.parse(line) as { type: string; delta?: { text?: string } })),
-          Stream.filter((json) => json.type === 'content_block_delta'),
-          Stream.map((json) => ({
-            id: 'stream',
-            content: json.delta?.text || '',
-            done: false,
-          })),
+        return streamSSE(res.stream).pipe(
+          Stream.filterMap((json) => {
+            const j = json as { type: string; delta?: { text?: string } };
+            return j.type === 'content_block_delta'
+              ? Option.some({
+                  id: 'stream',
+                  content: j.delta?.text || '',
+                  done: false,
+                })
+              : Option.none();
+          }),
         );
       }),
     ).pipe(Stream.catchAll((e) => Stream.fail(new Error(String(e))))),

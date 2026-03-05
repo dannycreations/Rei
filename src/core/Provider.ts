@@ -31,21 +31,25 @@ export const ProviderRegistryLive = Layer.effect(
     const config = yield* ConfigTag;
 
     const providers: ReadonlyArray<Provider> = [OpenAIProvider, AnthropicProvider, GeminiCliProvider];
-    const mappings = [...config['model-mappings']].sort((a, b) => b.from.length - a.from.length);
+    const mappings = [...config['model-mappings']]
+      .sort((a, b) => b.from.length - a.from.length)
+      .map((m) => ({ ...m, regex: new RegExp(`^${m.from.replace(/\*/g, '.*')}$`) }));
+
+    const modelToProviderCache = new Map<string, Provider>();
 
     const mapModel = (modelId: string): { readonly to: string; readonly with?: string } => {
-      const match = mappings.find((mapping) => {
-        const regex = new RegExp(`^${mapping.from.replace(/\*/g, '.*')}$`);
-        return regex.test(modelId);
-      });
-
+      const match = mappings.find((m) => m.regex.test(modelId));
       return match ? { to: match.to, with: match.with } : { to: modelId };
     };
 
     const getProvider = (modelId: string): Effect.Effect<Provider, Error> => {
+      const cached = modelToProviderCache.get(modelId);
+      if (cached) return Effect.succeed(cached);
+
       const provider = providers.find((p) => p.models.includes(modelId) || modelId.startsWith(p.id));
 
       if (provider) {
+        modelToProviderCache.set(modelId, provider);
         return Effect.succeed(provider);
       }
 

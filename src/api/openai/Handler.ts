@@ -63,37 +63,21 @@ export const OpenAIResponse = Schema.Struct({
 export type OpenAIResponse = Schema.Schema.Type<typeof OpenAIResponse>;
 
 export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
-  requestToInternal: (req: OpenAIRequest): InternalRequest => {
-    const messages: InternalRequest['messages'] = req.messages.map((msg) => {
-      if (typeof msg.content === 'string') {
-        return {
-          role: msg.role,
-          content: msg.content,
-        };
-      } else {
-        return {
-          role: msg.role,
-          content: msg.content.map((c) => {
-            if (c.type === 'text') {
-              return { type: 'text', text: c.text };
-            } else {
-              return { type: 'image', image: c.image_url.url };
-            }
-          }),
-        };
-      }
-    });
-
-    return {
-      model: req.model,
-      messages,
-      temperature: req.temperature,
-      topP: req.top_p,
-      maxTokens: req.max_tokens,
-      stream: req.stream ?? false,
-      stop: typeof req.stop === 'string' ? [req.stop] : req.stop,
-    };
-  },
+  requestToInternal: (req: OpenAIRequest): InternalRequest => ({
+    model: req.model,
+    messages: req.messages.map((msg) => ({
+      role: msg.role,
+      content:
+        typeof msg.content === 'string'
+          ? msg.content
+          : msg.content.map((c) => (c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', image: c.image_url.url })),
+    })),
+    temperature: req.temperature,
+    topP: req.top_p,
+    maxTokens: req.max_tokens,
+    stream: req.stream ?? false,
+    stop: typeof req.stop === 'string' ? [req.stop] : req.stop,
+  }),
 
   internalToResponse: (res: InternalResponse): OpenAIResponse => ({
     id: res.id,
