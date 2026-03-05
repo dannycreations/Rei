@@ -48,7 +48,7 @@ export const makeLoggerClient = (options: LoggerOptions = {}): pino.Logger => {
     rejection = true,
   } = options;
 
-  const now = new Date().toISOString().replace(/:/g, '-');
+  const now = new Date().toISOString().split('T')[0];
   const streams: ReadonlyArray<StreamEntry> = [
     {
       level: 'warn',
