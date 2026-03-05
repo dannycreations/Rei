@@ -21,6 +21,7 @@ export const Provider = Context.GenericTag<Provider>('@rei/core/Provider');
 export interface ProviderRegistry {
   readonly getProvider: (modelId: string) => Effect.Effect<Provider, Error>;
   readonly mapModel: (modelId: string) => { readonly to: string; readonly with?: string };
+  readonly getModels: () => Effect.Effect<ReadonlyArray<{ readonly id: string; readonly provider: string }>>;
 }
 
 export const ProviderRegistry = Context.GenericTag<ProviderRegistry>('@rei/core/ProviderRegistry');
@@ -56,9 +57,12 @@ export const ProviderRegistryLive = Layer.effect(
       return Effect.fail(new Error(`No provider found for model: ${modelId}`));
     };
 
+    const getModels = () => Effect.succeed(providers.flatMap((p) => p.models.map((m) => ({ id: m, provider: p.id }))));
+
     return {
       getProvider,
       mapModel,
+      getModels,
     };
   }),
 );
