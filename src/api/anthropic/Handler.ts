@@ -170,3 +170,32 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     }
   },
 };
+
+export const AnthropicCountTokensRequest = Schema.Struct({
+  model: Schema.String,
+  messages: Schema.Array(AnthropicMessage),
+  system: Schema.optional(Schema.String),
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        description: Schema.optional(Schema.String),
+        input_schema: Schema.Any,
+      }),
+    ),
+  ),
+});
+
+export type AnthropicCountTokensRequest = Schema.Schema.Type<typeof AnthropicCountTokensRequest>;
+
+export const AnthropicCountTokensResponse = Schema.Struct({
+  input_tokens: Schema.Number,
+});
+
+export type AnthropicCountTokensResponse = Schema.Schema.Type<typeof AnthropicCountTokensResponse>;
+
+export const ClaudeCountTokensHandler: ApiHandler<AnthropicCountTokensRequest, AnthropicCountTokensResponse> = {
+  requestToInternal: (req) => AnthropicHandler.requestToInternal({ ...req, max_tokens: 1 }),
+  internalToResponse: (res) => ({ input_tokens: res.usage.promptTokens }),
+  internalToStreamChunk: () => ({}),
+};

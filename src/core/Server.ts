@@ -20,7 +20,24 @@ export const Dispatcher = Effect.gen(function* () {
   return {
     models: () =>
       Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const userAgent = request.headers['user-agent'] ?? '';
         const models = yield* registry.getModels();
+
+        if (userAgent.startsWith('claude-cli')) {
+          return yield* HttpServerResponse.json({
+            data: models.map((m) => ({
+              id: m.id,
+              type: 'model',
+              display_name: m.id,
+              created_at: '2024-01-01T00:00:00Z',
+            })),
+            has_more: false,
+            first_id: models[0]?.id,
+            last_id: models[models.length - 1]?.id,
+          });
+        }
+
         return yield* HttpServerResponse.json({
           object: 'list',
           data: models.map((m) => ({
