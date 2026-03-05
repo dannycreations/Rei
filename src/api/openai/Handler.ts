@@ -110,66 +110,88 @@ export const OpenAIResponse = Schema.Struct({
 export type OpenAIResponse = Schema.Schema.Type<typeof OpenAIResponse>;
 
 export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
-  requestToInternal: (req: OpenAIRequest): InternalRequest => ({
-    model: req.model,
-    messages: req.messages.flatMap((msg) => {
-      const messages: Array<InternalRequest['messages'][number]> = [];
+  requestToInternal: (req: OpenAIRequest): InternalRequest => {
+    const systemMessages = req.messages.filter((m) => m.role === 'system');
+    const system =
+      systemMessages.length > 0
+        ? systemMessages
+            .map((m) => {
+              if (typeof m.content === 'string') return m.content;
+              if (Array.isArray(m.content)) {
+                return m.content
+                  .map((c) => (c.type === 'text' ? c.text : ''))
+                  .filter(Boolean)
+                  .join('\n');
+              }
+              return '';
+            })
+            .filter(Boolean)
+            .join('\n\n')
+        : undefined;
 
-      if (msg.role === 'tool') {
-        messages.push({
-          role: 'tool',
-          content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id!, content: msg.content as string }],
-        });
-      } else {
-        const content: Array<Extract<InternalRequest['messages'][number]['content'], ReadonlyArray<any>>[number]> = [];
+    return {
+      model: req.model,
+      system,
+      messages: req.messages.flatMap((msg) => {
+        if (msg.role === 'system') return [];
+        const messages: Array<InternalRequest['messages'][number]> = [];
 
-        if (typeof msg.content === 'string') {
-          content.push({ type: 'text', text: msg.content });
-        } else if (Array.isArray(msg.content)) {
-          for (const c of msg.content) {
-            if (c.type === 'text') {
-              content.push({ type: 'text', text: c.text });
-            } else if (c.type === 'image_url') {
-              content.push({ type: 'image', image: c.image_url.url });
+        if (msg.role === 'tool') {
+          messages.push({
+            role: 'tool',
+            content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id!, content: msg.content as string }],
+          });
+        } else {
+          const content: Array<Extract<InternalRequest['messages'][number]['content'], ReadonlyArray<unknown>>[number]> = [];
+
+          if (typeof msg.content === 'string') {
+            content.push({ type: 'text', text: msg.content });
+          } else if (Array.isArray(msg.content)) {
+            for (const c of msg.content) {
+              if (c.type === 'text') {
+                content.push({ type: 'text', text: c.text });
+              } else if (c.type === 'image_url') {
+                content.push({ type: 'image', image: c.image_url.url });
+              }
             }
           }
-        }
 
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            content.push({
-              type: 'tool_use',
-              id: tc.id,
-              name: tc.function.name,
-              input: JSON.parse(tc.function.arguments),
-            });
+          if (msg.tool_calls) {
+            for (const tc of msg.tool_calls) {
+              content.push({
+                type: 'tool_use',
+                id: tc.id,
+                name: tc.function.name,
+                input: JSON.parse(tc.function.arguments),
+              });
+            }
           }
+
+          messages.push({ role: msg.role, content });
         }
 
-        messages.push({ role: msg.role as any, content });
-      }
-
-      return messages;
-    }),
-    tools: req.tools?.map((tool) => ({
-      name: tool.function.name,
-      description: tool.function.description,
-      input_schema: tool.function.parameters,
-    })),
-    toolChoice:
-      typeof req.tool_choice === 'string'
-        ? req.tool_choice === 'required'
-          ? 'any'
+        return messages;
+      }),
+      tools: req.tools?.map((tool) => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        input_schema: tool.function.parameters,
+      })),
+      toolChoice:
+        typeof req.tool_choice === 'string'
+          ? req.tool_choice === 'required'
+            ? 'any'
+            : req.tool_choice
           : req.tool_choice
-        : req.tool_choice
-          ? { type: 'tool', name: req.tool_choice.function.name }
-          : undefined,
-    temperature: req.temperature,
-    topP: req.top_p,
-    maxTokens: req.max_tokens,
-    stream: req.stream ?? false,
-    stop: typeof req.stop === 'string' ? [req.stop] : req.stop,
-  }),
+            ? { type: 'tool', name: req.tool_choice.function.name }
+            : undefined,
+      temperature: req.temperature,
+      topP: req.top_p,
+      maxTokens: req.max_tokens,
+      stream: req.stream ?? false,
+      stop: typeof req.stop === 'string' ? [req.stop] : req.stop,
+    };
+  },
 
   internalToResponse: (res: InternalResponse): OpenAIResponse => {
     const textContent = res.content.find((c) => c.type === 'text');
@@ -198,7 +220,7 @@ export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
         {
           index: 0,
           message: {
-            role: res.role as Extract<typeof OpenAIMessageRole, { readonly Type: any }>['Type'],
+            role: res.role,
             content: textContent?.type === 'text' ? textContent.text : null,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },

@@ -101,7 +101,7 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     model: req.model,
     system: req.system,
     messages: req.messages.map((msg) => ({
-      role: msg.role as any,
+      role: msg.role,
       content:
         typeof msg.content === 'string'
           ? msg.content
@@ -129,9 +129,9 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     id: res.id,
     type: 'message',
     role: res.role === 'assistant' ? 'assistant' : 'user',
-    content: res.content.flatMap((c): Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: any }> => {
-      if (c.type === 'text') return [{ type: 'text' as const, text: c.text }];
-      if (c.type === 'tool_use') return [{ type: 'tool_use' as const, id: c.id, name: c.name, input: c.input }];
+    content: res.content.flatMap((c): Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown }> => {
+      if (c.type === 'text') return [{ type: 'text', text: c.text }];
+      if (c.type === 'tool_use') return [{ type: 'tool_use', id: c.id, name: c.name, input: c.input }];
       return [];
     }),
     model: res.model,

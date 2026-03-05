@@ -19,7 +19,7 @@ const mapRequest = (request: InternalRequest) => ({
   messages: request.messages
     .filter((m) => m.role !== 'system')
     .map((m) => ({
-      role: m.role as any,
+      role: m.role,
       content:
         typeof m.content === 'string'
           ? m.content
@@ -38,7 +38,7 @@ const mapRequest = (request: InternalRequest) => ({
                   content: c.content,
                   is_error: c.is_error,
                 };
-              return null as any;
+              return null;
             }),
     })),
   tools: request.tools?.map((t) => ({
@@ -81,7 +81,7 @@ export const AnthropicProvider: Provider = {
       const json = (yield* res.json) as {
         id: string;
         model: string;
-        content: Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: any }>;
+        content: Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown }>;
         usage: { input_tokens: number; output_tokens: number };
         error?: { message?: string };
       };
@@ -94,8 +94,8 @@ export const AnthropicProvider: Provider = {
         id: json.id,
         model: json.model,
         content: json.content.map((c): InternalResponse['content'][number] => {
-          if (c.type === 'text') return { type: 'text' as const, text: c.text };
-          return { type: 'tool_use' as const, id: c.id, name: c.name, input: c.input };
+          if (c.type === 'text') return { type: 'text', text: c.text };
+          return { type: 'tool_use', id: c.id, name: c.name, input: c.input };
         }),
         role: 'assistant' as const,
         usage: {
@@ -131,12 +131,12 @@ export const AnthropicProvider: Provider = {
             };
             if (j.type === 'content_block_delta') {
               let content: InternalStreamChunk['content'] = {
-                type: 'text_delta' as const,
+                type: 'text_delta',
                 text: j.delta?.text || '',
               };
               if (j.delta?.partial_json) {
                 content = {
-                  type: 'tool_use_delta' as const,
+                  type: 'tool_use_delta',
                   index: j.index ?? 0,
                   input: j.delta.partial_json,
                 };
@@ -153,7 +153,7 @@ export const AnthropicProvider: Provider = {
                 return Option.some({
                   id: 'stream',
                   content: {
-                    type: 'tool_use_delta' as const,
+                    type: 'tool_use_delta',
                     index: j.index ?? 0,
                     id: start.content_block.id,
                     name: start.content_block.name,
@@ -167,7 +167,7 @@ export const AnthropicProvider: Provider = {
               if (delta.delta?.stop_reason) {
                 return Option.some({
                   id: 'stream',
-                  content: { type: 'text_delta' as const, text: '' },
+                  content: { type: 'text_delta', text: '' },
                   done: true,
                 });
               }

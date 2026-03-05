@@ -69,9 +69,9 @@ export const Dispatcher = Effect.gen(function* () {
             Stream.concat(Stream.make('data: [DONE]\n\n')),
             Stream.encodeText,
             Stream.orDie,
-          );
+          ) as Stream.Stream<Uint8Array, never, never>;
 
-          return HttpServerResponse.stream(encodedStream as Stream.Stream<Uint8Array, never, never>, {
+          return HttpServerResponse.stream(encodedStream, {
             headers: {
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache',

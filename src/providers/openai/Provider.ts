@@ -13,11 +13,11 @@ export const OpenAIAuth = Schema.Struct({
 
 export type OpenAIAuth = Schema.Schema.Type<typeof OpenAIAuth>;
 
-const mapRequest = (request: InternalRequest) => ({
-  model: request.model,
-  messages: request.messages.map((m) => {
+const mapRequest = (request: InternalRequest) => {
+  const messages = request.messages.map((m) => {
     if (m.role === 'tool') {
-      const toolResult = m.content[0] as Extract<typeof m.content, ReadonlyArray<any>>[number];
+      const toolResult = Array.isArray(m.content) ? m.content[0] : { type: 'text', text: m.content };
+
       if (toolResult.type === 'tool_result') {
         return {
           role: 'tool',
@@ -30,7 +30,7 @@ const mapRequest = (request: InternalRequest) => ({
     if (Array.isArray(m.content)) {
       const toolCalls = m.content
         .filter((c) => c.type === 'tool_use')
-        .map((c: any) => ({
+        .map((c) => ({
           id: c.id,
           type: 'function',
           function: {
@@ -43,7 +43,7 @@ const mapRequest = (request: InternalRequest) => ({
         .filter((c) => c.type === 'text' || c.type === 'image')
         .map((c) => {
           if (c.type === 'text') return { type: 'text', text: c.text };
-          if (c.type === 'image') return { type: 'image_url', image_url: { url: (c as any).image } };
+          if (c.type === 'image') return { type: 'image_url', image_url: { url: c.image } };
           return null;
         })
         .filter(Boolean);
@@ -59,29 +59,41 @@ const mapRequest = (request: InternalRequest) => ({
       role: m.role,
       content: m.content,
     };
-  }),
-  tools: request.tools?.map((t) => ({
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.input_schema,
-    },
-  })),
-  tool_choice:
-    typeof request.toolChoice === 'string'
-      ? request.toolChoice === 'any'
-        ? 'required'
+  });
+
+  if (request.system) {
+    messages.unshift({
+      role: 'system',
+      content: request.system,
+    });
+  }
+
+  return {
+    model: request.model,
+    messages,
+    tools: request.tools?.map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    })),
+    tool_choice:
+      typeof request.toolChoice === 'string'
+        ? request.toolChoice === 'any'
+          ? 'required'
+          : request.toolChoice
         : request.toolChoice
-      : request.toolChoice
-        ? { type: 'function', function: { name: request.toolChoice.name } }
-        : undefined,
-  temperature: request.temperature,
-  max_tokens: request.maxTokens,
-  stream: request.stream,
-  top_p: request.topP,
-  stop: request.stop,
-});
+          ? { type: 'function', function: { name: request.toolChoice.name } }
+          : undefined,
+    temperature: request.temperature,
+    max_tokens: request.maxTokens,
+    stream: request.stream,
+    top_p: request.topP,
+    stop: request.stop,
+  };
+};
 
 export const OpenAIProvider: Provider = {
   id: 'openai',
@@ -126,13 +138,13 @@ export const OpenAIProvider: Provider = {
       const content: Array<InternalResponse['content'][number]> = [];
 
       if (message.content) {
-        content.push({ type: 'text' as const, text: message.content });
+        content.push({ type: 'text', text: message.content });
       }
 
       if (message.tool_calls) {
         for (const tc of message.tool_calls) {
           content.push({
-            type: 'tool_use' as const,
+            type: 'tool_use',
             id: tc.id,
             name: tc.function.name,
             input: JSON.parse(tc.function.arguments),

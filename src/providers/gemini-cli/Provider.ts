@@ -178,7 +178,7 @@ const ensureAuthenticated = (): Effect.Effect<
         Effect.gen(function* () {
           let oauthPath: string = '';
           const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env')).pipe(
-            Effect.map((s) => s as string | undefined),
+            Effect.map((s) => s),
             Effect.catchAll(() => Effect.succeed(undefined)),
           );
           if (envContent !== undefined) {
@@ -264,7 +264,7 @@ export const GeminiCliProvider: Provider = {
                 thought?: boolean;
                 functionCall?: {
                   name: string;
-                  args: any;
+                  args: unknown;
                 };
               }>;
             };
@@ -284,11 +284,11 @@ export const GeminiCliProvider: Provider = {
 
       for (const p of parts) {
         if (p.text && !p.thought) {
-          content.push({ type: 'text' as const, text: p.text });
+          content.push({ type: 'text', text: p.text });
         }
         if (p.functionCall) {
           content.push({
-            type: 'tool_use' as const,
+            type: 'tool_use',
             id: `${p.functionCall.name}_${Date.now()}`,
             name: p.functionCall.name,
             input: p.functionCall.args,
@@ -341,7 +341,7 @@ export const GeminiCliProvider: Provider = {
                       text?: string;
                       functionCall?: {
                         name: string;
-                        args: any;
+                        args: unknown;
                       };
                     }>;
                   };
@@ -358,17 +358,17 @@ export const GeminiCliProvider: Provider = {
             const chunks = parts.map((p): InternalStreamChunk => {
               let content: InternalStreamChunk['content'];
               if (p.text) {
-                content = { type: 'text_delta' as const, text: p.text };
+                content = { type: 'text_delta', text: p.text };
               } else if (p.functionCall) {
                 content = {
-                  type: 'tool_use_delta' as const,
+                  type: 'tool_use_delta',
                   index: 0,
                   id: `${p.functionCall.name}_${Date.now()}`,
                   name: p.functionCall.name,
-                  input: JSON.stringify(p.functionCall.args),
+                  input: p.functionCall.args ? JSON.stringify(p.functionCall.args) : undefined,
                 };
               } else {
-                content = { type: 'text_delta' as const, text: '' };
+                content = { type: 'text_delta', text: '' };
               }
               return {
                 id: responseId,
@@ -380,7 +380,7 @@ export const GeminiCliProvider: Provider = {
             if (done) {
               chunks.push({
                 id: responseId,
-                content: { type: 'text_delta' as const, text: '' },
+                content: { type: 'text_delta', text: '' },
                 done: true,
               });
             }
