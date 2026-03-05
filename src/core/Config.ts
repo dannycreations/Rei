@@ -2,12 +2,6 @@ import { FileSystem } from '@effect/platform';
 import { Context, Effect, Layer, Schema } from 'effect';
 import { parse } from 'yaml';
 
-export const parseYaml = (content: string) =>
-  Effect.try({
-    try: () => parse(content),
-    catch: (error) => new Error(`Failed to parse YAML: ${error}`),
-  }).pipe(Effect.flatMap(Schema.decodeUnknown(Config)));
-
 export const ModelMapping = Schema.Struct({
   from: Schema.String,
   to: Schema.String,
@@ -50,6 +44,9 @@ export const ConfigLive = (path?: string) =>
 
       const fs = yield* FileSystem.FileSystem;
       const content = yield* fs.readFileString(path);
-      return yield* parseYaml(content);
+      return yield* Effect.try({
+        try: () => parse(content),
+        catch: (error) => new Error(`Failed to parse YAML: ${error}`),
+      }).pipe(Effect.flatMap(Schema.decodeUnknown(Config)));
     }),
   );

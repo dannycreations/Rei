@@ -82,34 +82,57 @@ export const Dispatcher = Effect.gen(function* () {
   };
 });
 
+const corsMiddleware = HttpMiddleware.make((httpApp) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+
+    if (request.method === 'OPTIONS') {
+      return HttpServerResponse.empty({ status: 204 }).pipe(
+        HttpServerResponse.setHeader('Access-Control-Allow-Origin', '*'),
+        HttpServerResponse.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'),
+        HttpServerResponse.setHeader('Access-Control-Allow-Headers', '*'),
+      );
+    }
+
+    const response = yield* httpApp;
+
+    return response.pipe(
+      HttpServerResponse.setHeader('Access-Control-Allow-Origin', '*'),
+      HttpServerResponse.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'),
+      HttpServerResponse.setHeader('Access-Control-Allow-Headers', '*'),
+    );
+  }),
+);
+
+const authMiddleware = HttpMiddleware.make((httpApp) =>
+  Effect.gen(function* () {
+    const config = yield* ConfigTag;
+    const authKeys = new Set(config['auth-keys']);
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const remoteAddress = Option.getOrElse(request.remoteAddress, () => '');
+
+    // If it's localhost, we allow it to be without bearer token
+    if (isLocalhost(remoteAddress)) {
+      return yield* httpApp;
+    }
+
+    // If not localhost, we force authentication
+    const authHeader = request.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return yield* HttpServerResponse.json({ error: 'Unauthorized: Missing or invalid Bearer token' }, { status: 401 });
+    }
+
+    if (!authKeys.has(authHeader.substring(7))) {
+      return yield* HttpServerResponse.json({ error: 'Unauthorized: Invalid auth key' }, { status: 401 });
+    }
+
+    return yield* httpApp;
+  }),
+);
+
 export const server = HttpRouter.empty.pipe(
-  HttpRouter.use(
-    HttpMiddleware.make((httpApp) =>
-      Effect.gen(function* () {
-        const config = yield* ConfigTag;
-        const authKeys = new Set(config['auth-keys']);
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const remoteAddress = Option.getOrElse(request.remoteAddress, () => '');
-
-        // If it's localhost, we allow it to be without bearer token
-        if (isLocalhost(remoteAddress)) {
-          return yield* httpApp;
-        }
-
-        // If not localhost, we force authentication
-        const authHeader = request.headers['authorization'];
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-          return yield* HttpServerResponse.json({ error: 'Unauthorized: Missing or invalid Bearer token' }, { status: 401 });
-        }
-
-        if (!authKeys.has(authHeader.substring(7))) {
-          return yield* HttpServerResponse.json({ error: 'Unauthorized: Invalid auth key' }, { status: 401 });
-        }
-
-        return yield* httpApp;
-      }),
-    ),
-  ),
+  HttpRouter.use(corsMiddleware),
+  HttpRouter.use(authMiddleware),
   HttpRouter.concat(openAIRouter),
   HttpRouter.concat(anthropicRouter),
   HttpRouter.get('/v1/models', Effect.flatMap(Dispatcher, (d) => d.models()).pipe(Effect.flatten)),
