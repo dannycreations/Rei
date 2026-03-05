@@ -70,15 +70,18 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
     if (session.data.project_id) return session.data.project_id;
 
     const fs = yield* FileSystem.FileSystem;
-    try {
-      const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env'));
-      const match = envContent.match(/GOOGLE_CLOUD_PROJECT=["']?([^"'\\\r\n\s]+)["']?/);
+    const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env')).pipe(
+      Effect.map((s) => s as string | undefined),
+      Effect.catchAll(() => Effect.succeed(undefined)),
+    );
+    if (envContent !== undefined) {
+      const match = envContent.match(/GOOGLE_CLOUD_PROJECT=[\"']?([^\"'\\r\\n\\s]+)[\"']?/);
       if (match) {
         const id = match[1].trim();
         yield* session.save({ ...session.data, project_id: id });
         return id;
       }
-    } catch {}
+    }
 
     const client = yield* HttpClient.HttpClient;
     const loadReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`).pipe(
@@ -94,7 +97,7 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
       allowedTiers?: Array<{ id: string; isDefault?: boolean }>;
     };
 
-    let projectId = 'dummy-project';
+    let projectId: string | undefined;
 
     if (loadJson.cloudaicompanionProject) {
       projectId = loadJson.cloudaicompanionProject;
@@ -112,7 +115,15 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
       const onboardJson = (yield* onboardRes.json) as {
         response?: { cloudaicompanionProject?: { id?: string } };
       };
-      projectId = onboardJson.response?.cloudaicompanionProject?.id || 'dummy-project';
+      projectId = onboardJson.response?.cloudaicompanionProject?.id;
+    }
+
+    if (!projectId) {
+      return yield* Effect.fail(
+        new Error(
+          'Failed to determine Google Cloud Project ID for Gemini CLI. Please set GOOGLE_CLOUD_PROJECT in .env or ensure your account is onboarded.',
+        ),
+      );
     }
 
     yield* session.save({ ...session.data, project_id: projectId });
@@ -131,11 +142,14 @@ const ensureAuthenticated = (): Effect.Effect<
       Effect.catchAll(() =>
         Effect.gen(function* () {
           let oauthPath: string = '';
-          try {
-            const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env'));
-            const match = envContent.match(/GOOGLE_OAUTH_PATH=["']?([^"'\\\r\n\s]+)["']?/);
+          const envContent = yield* fs.readFileString(join(dirname(OAUTH_DEFAULT_PATH), '.env')).pipe(
+            Effect.map((s) => s as string | undefined),
+            Effect.catchAll(() => Effect.succeed(undefined)),
+          );
+          if (envContent !== undefined) {
+            const match = envContent.match(/GOOGLE_OAUTH_PATH=[\"']?([^\"'\\r\\n\\s]+)[\"']?/);
             if (match) oauthPath = match[1].trim();
-          } catch {}
+          }
           const credPath = oauthPath || OAUTH_DEFAULT_PATH;
           return yield* auth.load('gemini-cli', credPath, OAuthCredentials);
         }),
@@ -220,12 +234,12 @@ export const GeminiCliProvider: Provider = {
       };
       const json = (yield* res.json) as GeminiResponse;
 
-      const candidate = json.response?.candidates?.[0];
-      const content =
-        candidate?.content?.parts
-          ?.filter((p) => p.text && !p.thought)
-          ?.map((p) => p.text)
-          ?.join('') || '';
+      const candidates = json.response?.candidates || [];
+      const content = candidates
+        .flatMap((c) => c.content?.parts || [])
+        .filter((p) => p.text && !p.thought)
+        .map((p) => p.text)
+        .join('');
 
       const usage = json.response?.usageMetadata || {};
 
@@ -269,8 +283,8 @@ export const GeminiCliProvider: Provider = {
           Stream.map((line) => line.slice(6).trim()),
           Stream.filter((line) => line.length > 0),
           Stream.mapEffect((line) =>
-            Effect.try(
-              () =>
+            Effect.try({
+              try: () =>
                 JSON.parse(line) as {
                   response?: {
                     candidates?: Array<{
@@ -280,16 +294,34 @@ export const GeminiCliProvider: Provider = {
                     responseId?: string;
                   };
                 },
-            ),
+              catch: (e) => {
+                return new Error(`JSON parse error: ${String(e)} line: ${line}`);
+              },
+            }),
           ),
-          Stream.map((json) => {
+          Stream.flatMap((json) => {
             const candidate = json.response?.candidates?.[0];
-            const part = candidate?.content?.parts?.[0];
-            return {
-              id: json.response?.responseId || '',
-              content: part?.text || '',
-              done: !!candidate?.finishReason,
-            };
+            const parts = candidate?.content?.parts || [];
+            const responseId = json.response?.responseId || '';
+            const done = !!candidate?.finishReason;
+
+            const chunks = parts
+              .filter((p) => p.text)
+              .map((p) => ({
+                id: responseId,
+                content: p.text!,
+                done: false,
+              }));
+
+            if (done) {
+              chunks.push({
+                id: responseId,
+                content: '',
+                done: true,
+              });
+            }
+
+            return Stream.fromIterable(chunks);
           }),
         );
       }),

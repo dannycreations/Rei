@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { createServer } from 'node:http';
 import { Command, Options } from '@effect/cli';
 import { HttpMiddleware, HttpServer } from '@effect/platform';
@@ -17,12 +19,12 @@ const run = (args: {
     readonly config: Option.Option<string>;
     readonly auth: ReadonlyArray<string>;
     readonly auth_dir: ReadonlyArray<string>;
-    readonly log_level: string;
+    readonly log_level: Option.Option<string>;
     readonly log_dir: Option.Option<string>;
   };
 }) => {
   const logger = makeLoggerClient({
-    level: args.options.log_level as never,
+    level: Option.getOrUndefined(args.options.log_level),
     dir: Option.getOrUndefined(args.options.log_dir),
   });
 
@@ -74,11 +76,11 @@ const run = (args: {
 };
 
 const options = Options.all({
+  port: Options.integer('port').pipe(Options.withDescription('Port to listen on'), Options.withDefault(1490)),
   config: Options.text('config').pipe(Options.withDescription('Path to yaml config file'), Options.optional),
   auth: Options.text('auth').pipe(Options.withDescription('Path to auth file'), Options.repeated),
   auth_dir: Options.text('auth_dir').pipe(Options.withDescription('Directory containing auth files'), Options.repeated),
-  port: Options.integer('port').pipe(Options.withDescription('Port to listen on'), Options.withDefault(1490)),
-  log_level: Options.text('log_level').pipe(Options.withDescription('Log level'), Options.withDefault('info')),
+  log_level: Options.text('log_level').pipe(Options.withDescription('Log level'), Options.optional),
   log_dir: Options.text('log_dir').pipe(Options.withDescription('Log directory'), Options.optional),
 });
 

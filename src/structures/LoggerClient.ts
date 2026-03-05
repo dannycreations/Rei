@@ -29,7 +29,7 @@ export const EFFECT_LEVEL_MAP: ReadonlyRecord<LogLevel.LogLevel['_tag'], pino.Le
 
 export const LoggerOptions = Schema.Struct({
   dir: Schema.optional(Schema.String),
-  level: Schema.optional(Schema.String as unknown as Schema.Schema<Level, string>),
+  level: Schema.optional(Schema.String),
   trace: Schema.optional(Schema.Boolean),
   pretty: Schema.optional(Schema.Boolean),
   exception: Schema.optional(Schema.Boolean),

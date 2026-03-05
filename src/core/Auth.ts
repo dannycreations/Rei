@@ -112,6 +112,7 @@ export const AuthLive = (paths: ReadonlyArray<string>, dirs: ReadonlyArray<strin
           }
 
           const cred = yield* loadInternal(idOrPath).pipe(
+            Effect.map((c) => (c.providerId === 'unknown' ? { ...c, providerId } : c)),
             Effect.filterOrFail(
               (c) => c.providerId === providerId,
               (c) => new Error(`Credential at ${idOrPath} belongs to ${c.providerId}, not ${providerId}`),
