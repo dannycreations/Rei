@@ -26,6 +26,7 @@ const mapRequest = (request: InternalRequest) => ({
 export const AnthropicProvider: Provider = {
   id: 'anthropic',
   name: 'Anthropic',
+  models: [],
 
   generate: (request: InternalRequest) =>
     Effect.gen(function* () {

@@ -25,6 +25,7 @@ const mapRequest = (request: InternalRequest) => ({
 export const OpenAIProvider: Provider = {
   id: 'openai',
   name: 'OpenAI',
+  models: [],
 
   generate: (request: InternalRequest) =>
     Effect.gen(function* () {

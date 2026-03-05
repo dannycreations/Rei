@@ -11,6 +11,7 @@ import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema
 export interface Provider {
   readonly id: string;
   readonly name: string;
+  readonly models: ReadonlyArray<string>;
   readonly generate: (request: InternalRequest) => Effect.Effect<InternalResponse, Error, Auth | HttpClient.HttpClient | FileSystem.FileSystem>;
   readonly stream: (request: InternalRequest) => Stream.Stream<InternalStreamChunk, Error, Auth | HttpClient.HttpClient | FileSystem.FileSystem>;
 }
@@ -30,9 +31,9 @@ export const ProviderRegistryLive = Layer.effect(
     const config = yield* ConfigTag;
 
     const providers: ReadonlyArray<Provider> = [OpenAIProvider, AnthropicProvider, GeminiCliProvider];
+    const mappings = [...config['model-mappings']].sort((a, b) => b.from.length - a.from.length);
 
     const mapModel = (modelId: string): { readonly to: string; readonly with?: string } => {
-      const mappings = config['model-mappings'];
       const match = mappings.find((mapping) => {
         const regex = new RegExp(`^${mapping.from.replace(/\*/g, '.*')}$`);
         return regex.test(modelId);
@@ -42,7 +43,7 @@ export const ProviderRegistryLive = Layer.effect(
     };
 
     const getProvider = (modelId: string): Effect.Effect<Provider, Error> => {
-      const provider = providers.find((p) => modelId.startsWith(p.id) || p.id === modelId);
+      const provider = providers.find((p) => p.models.includes(modelId) || modelId.startsWith(p.id));
 
       if (provider) {
         return Effect.succeed(provider);
