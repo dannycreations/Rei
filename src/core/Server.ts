@@ -9,8 +9,6 @@ import { ProviderRegistry } from './Provider.js';
 import { InternalRequest, InternalResponse, InternalStreamChunk } from './Schema.js';
 
 export const server = HttpRouter.empty.pipe(
-  HttpRouter.mount('/openai', openAIRouter),
-  HttpRouter.mount('/anthropic', anthropicRouter),
   HttpRouter.use(
     HttpMiddleware.make((httpApp) =>
       Effect.gen(function* () {
@@ -37,6 +35,9 @@ export const server = HttpRouter.empty.pipe(
       }),
     ),
   ),
+  HttpRouter.concat(openAIRouter),
+  HttpRouter.concat(anthropicRouter),
+  HttpRouter.all('*', HttpServerResponse.empty()),
 );
 
 export interface ApiHandler<R, T> {
@@ -80,6 +81,14 @@ export const Dispatcher = Effect.gen(function* () {
 
         const response = yield* provider.generate(request);
         return HttpServerResponse.json(handler.internalToResponse(response));
-      }),
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.succeed(
+            HttpServerResponse.isServerResponse(error)
+              ? error
+              : HttpServerResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 }),
+          ),
+        ),
+      ),
   };
 });
