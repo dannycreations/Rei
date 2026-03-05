@@ -19,6 +19,18 @@ export const AnthropicContent = Schema.Union(
       data: Schema.String,
     }),
   }),
+  Schema.Struct({
+    type: Schema.Literal('tool_use'),
+    id: Schema.String,
+    name: Schema.String,
+    input: Schema.Any,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('tool_result'),
+    tool_use_id: Schema.String,
+    content: Schema.Union(Schema.String, Schema.Array(Schema.Struct({ type: Schema.Literal('text'), text: Schema.String }))),
+    is_error: Schema.optional(Schema.Boolean),
+  }),
 );
 
 export const AnthropicMessage = Schema.Struct({
@@ -30,6 +42,22 @@ export const AnthropicRequest = Schema.Struct({
   model: Schema.String,
   messages: Schema.Array(AnthropicMessage),
   system: Schema.optional(Schema.String),
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        description: Schema.optional(Schema.String),
+        input_schema: Schema.Any,
+      }),
+    ),
+  ),
+  tool_choice: Schema.optional(
+    Schema.Union(
+      Schema.Struct({ type: Schema.Literal('auto') }),
+      Schema.Struct({ type: Schema.Literal('any') }),
+      Schema.Struct({ type: Schema.Literal('tool'), name: Schema.String }),
+    ),
+  ),
   max_tokens: Schema.Number,
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
@@ -44,10 +72,18 @@ export const AnthropicResponse = Schema.Struct({
   type: Schema.Literal('message'),
   role: AnthropicMessageRole,
   content: Schema.Array(
-    Schema.Struct({
-      type: Schema.Literal('text'),
-      text: Schema.String,
-    }),
+    Schema.Union(
+      Schema.Struct({
+        type: Schema.Literal('text'),
+        text: Schema.String,
+      }),
+      Schema.Struct({
+        type: Schema.Literal('tool_use'),
+        id: Schema.String,
+        name: Schema.String,
+        input: Schema.Any,
+      }),
+    ),
   ),
   model: Schema.String,
   stop_reason: Schema.Union(Schema.Literal('end_turn', 'max_tokens', 'stop_sequence', 'tool_use'), Schema.Null),
@@ -65,12 +101,23 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     model: req.model,
     system: req.system,
     messages: req.messages.map((msg) => ({
-      role: msg.role,
+      role: msg.role as any,
       content:
         typeof msg.content === 'string'
           ? msg.content
-          : msg.content.map((c) => (c.type === 'text' ? { type: 'text', text: c.text } : { type: 'image', image: c.source.data })),
+          : msg.content.map((c) => {
+              if (c.type === 'text') return { type: 'text', text: c.text };
+              if (c.type === 'image') return { type: 'image', image: c.source.data };
+              if (c.type === 'tool_use') return { type: 'tool_use', id: c.id, name: c.name, input: c.input };
+              return { type: 'tool_result', tool_use_id: c.tool_use_id, content: c.content, is_error: c.is_error };
+            }),
     })),
+    tools: req.tools?.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.input_schema,
+    })),
+    toolChoice: req.tool_choice?.type === 'tool' ? { type: 'tool', name: req.tool_choice.name } : req.tool_choice?.type,
     maxTokens: req.max_tokens,
     temperature: req.temperature,
     topP: req.top_p,
@@ -82,14 +129,13 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     id: res.id,
     type: 'message',
     role: res.role === 'assistant' ? 'assistant' : 'user',
-    content: [
-      {
-        type: 'text',
-        text: res.content,
-      },
-    ],
+    content: res.content.flatMap((c): Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: any }> => {
+      if (c.type === 'text') return [{ type: 'text' as const, text: c.text }];
+      if (c.type === 'tool_use') return [{ type: 'tool_use' as const, id: c.id, name: c.name, input: c.input }];
+      return [];
+    }),
     model: res.model,
-    stop_reason: 'end_turn',
+    stop_reason: res.content.some((c) => c.type === 'tool_use') ? 'tool_use' : 'end_turn',
     stop_sequence: null,
     usage: {
       input_tokens: res.usage.promptTokens,
@@ -103,13 +149,24 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
         type: 'message_stop',
       };
     }
-    return {
-      type: 'content_block_delta',
-      index: 0,
-      delta: {
-        type: 'text_delta',
-        text: chunk.content,
-      },
-    };
+    if (chunk.content.type === 'text_delta') {
+      return {
+        type: 'content_block_delta',
+        index: 0,
+        delta: {
+          type: 'text_delta',
+          text: chunk.content.text,
+        },
+      };
+    } else {
+      return {
+        type: 'content_block_delta',
+        index: chunk.content.index,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: chunk.content.input ?? '',
+        },
+      };
+    }
   },
 };

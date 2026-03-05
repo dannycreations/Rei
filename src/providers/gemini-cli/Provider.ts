@@ -5,7 +5,7 @@ import { Effect, Option, Schema, Stream } from 'effect';
 
 import { Auth, AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
-import { InternalRequest } from '../../core/Schema.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
 import { streamSSE } from '../../helpers/Server.js';
 
 import type { AuthSession } from '../../core/Auth.js';
@@ -40,12 +40,50 @@ const mapRequest = (request: InternalRequest) => {
       parts:
         typeof m.content === 'string'
           ? [{ text: m.content }]
-          : m.content.map((c) => (c.type === 'text' ? { text: c.text } : { text: `[Image: ${c.image}]` })),
+          : m.content.map((c) => {
+              if (c.type === 'text') return { text: c.text };
+              if (c.type === 'tool_use')
+                return {
+                  functionCall: {
+                    name: c.name,
+                    args: c.input,
+                  },
+                };
+              if (c.type === 'tool_result')
+                return {
+                  functionResponse: {
+                    name: c.tool_use_id,
+                    response: { result: c.content },
+                  },
+                };
+              return { text: `[Image: ${c.image}]` };
+            }),
     }));
+
+  const tools = request.tools
+    ? [
+        {
+          functionDeclarations: request.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parametersJsonSchema: t.input_schema,
+          })),
+        },
+      ]
+    : undefined;
 
   return {
     contents,
     systemInstruction,
+    tools,
+    toolConfig: request.toolChoice
+      ? {
+          functionCallingConfig: {
+            mode: request.toolChoice === 'auto' ? 'AUTO' : request.toolChoice === 'any' ? 'ANY' : request.toolChoice === 'none' ? 'NONE' : 'ANY',
+            allowedFunctionNames: typeof request.toolChoice !== 'string' ? [request.toolChoice.name] : undefined,
+          },
+        }
+      : undefined,
     generationConfig: {
       temperature: request.temperature,
       maxOutputTokens: request.maxTokens,
@@ -78,7 +116,11 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
     const loadReq = HttpClientRequest.post(`${CODE_ASSIST_ENDPOINT}:loadCodeAssist`).pipe(
       HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
       HttpClientRequest.bodyJson({
-        metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
+        metadata: {
+          ideType: 'IDE_UNSPECIFIED',
+          platform: 'PLATFORM_UNSPECIFIED',
+          pluginType: 'GEMINI',
+        },
       }),
     );
 
@@ -96,7 +138,11 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
         HttpClientRequest.setHeader('Authorization', `Bearer ${session.data.access_token}`),
         HttpClientRequest.bodyJson({
           tierId,
-          metadata: { ideType: 'IDE_UNSPECIFIED', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' },
+          metadata: {
+            ideType: 'IDE_UNSPECIFIED',
+            platform: 'PLATFORM_UNSPECIFIED',
+            pluginType: 'GEMINI',
+          },
         }),
       );
 
@@ -212,7 +258,16 @@ export const GeminiCliProvider: Provider = {
       type GeminiResponse = {
         response?: {
           candidates?: Array<{
-            content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+            content?: {
+              parts?: Array<{
+                text?: string;
+                thought?: boolean;
+                functionCall?: {
+                  name: string;
+                  args: any;
+                };
+              }>;
+            };
           }>;
           usageMetadata?: {
             promptTokenCount?: number;
@@ -224,11 +279,22 @@ export const GeminiCliProvider: Provider = {
       const json = (yield* res.json) as GeminiResponse;
 
       const candidates = json.response?.candidates || [];
-      const content = candidates
-        .flatMap((c) => c.content?.parts || [])
-        .filter((p) => p.text && !p.thought)
-        .map((p) => p.text)
-        .join('');
+      const parts = candidates.flatMap((c) => c.content?.parts || []);
+      const content: Array<InternalResponse['content'][number]> = [];
+
+      for (const p of parts) {
+        if (p.text && !p.thought) {
+          content.push({ type: 'text' as const, text: p.text });
+        }
+        if (p.functionCall) {
+          content.push({
+            type: 'tool_use' as const,
+            id: `${p.functionCall.name}_${Date.now()}`,
+            name: p.functionCall.name,
+            input: p.functionCall.args,
+          });
+        }
+      }
 
       const usage = json.response?.usageMetadata || {};
 
@@ -270,7 +336,15 @@ export const GeminiCliProvider: Provider = {
             const j = json as {
               response?: {
                 candidates?: Array<{
-                  content?: { parts?: Array<{ text?: string }> };
+                  content?: {
+                    parts?: Array<{
+                      text?: string;
+                      functionCall?: {
+                        name: string;
+                        args: any;
+                      };
+                    }>;
+                  };
                   finishReason?: string | null;
                 }>;
                 responseId?: string;
@@ -281,18 +355,32 @@ export const GeminiCliProvider: Provider = {
             const responseId = j.response?.responseId || '';
             const done = !!candidate?.finishReason;
 
-            const chunks = parts
-              .filter((p) => p.text)
-              .map((p) => ({
+            const chunks = parts.map((p): InternalStreamChunk => {
+              let content: InternalStreamChunk['content'];
+              if (p.text) {
+                content = { type: 'text_delta' as const, text: p.text };
+              } else if (p.functionCall) {
+                content = {
+                  type: 'tool_use_delta' as const,
+                  index: 0,
+                  id: `${p.functionCall.name}_${Date.now()}`,
+                  name: p.functionCall.name,
+                  input: JSON.stringify(p.functionCall.args),
+                };
+              } else {
+                content = { type: 'text_delta' as const, text: '' };
+              }
+              return {
                 id: responseId,
-                content: p.text!,
+                content,
                 done: false,
-              }));
+              };
+            });
 
             if (done) {
               chunks.push({
                 id: responseId,
-                content: '',
+                content: { type: 'text_delta' as const, text: '' },
                 done: true,
               });
             }

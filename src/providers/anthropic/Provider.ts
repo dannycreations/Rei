@@ -3,7 +3,7 @@ import { Effect, Option, Schema, Stream } from 'effect';
 
 import { AuthTag } from '../../core/Auth.js';
 import { Provider } from '../../core/Provider.js';
-import { InternalRequest } from '../../core/Schema.js';
+import { InternalRequest, InternalResponse, InternalStreamChunk } from '../../core/Schema.js';
 import { streamSSE } from '../../helpers/Server.js';
 
 export const AnthropicAuth = Schema.Struct({
@@ -16,7 +16,42 @@ export type AnthropicAuth = Schema.Schema.Type<typeof AnthropicAuth>;
 const mapRequest = (request: InternalRequest) => ({
   model: request.model,
   system: request.system,
-  messages: request.messages.filter((m) => m.role !== 'system'),
+  messages: request.messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role as any,
+      content:
+        typeof m.content === 'string'
+          ? m.content
+          : m.content.map((c) => {
+              if (c.type === 'text') return { type: 'text', text: c.text };
+              if (c.type === 'image')
+                return {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: c.image },
+                };
+              if (c.type === 'tool_use') return { type: 'tool_use', id: c.id, name: c.name, input: c.input };
+              if (c.type === 'tool_result')
+                return {
+                  type: 'tool_result',
+                  tool_use_id: c.tool_use_id,
+                  content: c.content,
+                  is_error: c.is_error,
+                };
+              return null as any;
+            }),
+    })),
+  tools: request.tools?.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema,
+  })),
+  tool_choice:
+    typeof request.toolChoice === 'string'
+      ? { type: request.toolChoice }
+      : request.toolChoice
+        ? { type: 'tool', name: request.toolChoice.name }
+        : undefined,
   max_tokens: request.maxTokens ?? 4096,
   temperature: request.temperature,
   top_p: request.topP,
@@ -46,7 +81,7 @@ export const AnthropicProvider: Provider = {
       const json = (yield* res.json) as {
         id: string;
         model: string;
-        content: Array<{ type: 'text'; text: string }>;
+        content: Array<{ type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: any }>;
         usage: { input_tokens: number; output_tokens: number };
         error?: { message?: string };
       };
@@ -58,7 +93,10 @@ export const AnthropicProvider: Provider = {
       return {
         id: json.id,
         model: json.model,
-        content: json.content[0].text,
+        content: json.content.map((c): InternalResponse['content'][number] => {
+          if (c.type === 'text') return { type: 'text' as const, text: c.text };
+          return { type: 'tool_use' as const, id: c.id, name: c.name, input: c.input };
+        }),
         role: 'assistant' as const,
         usage: {
           promptTokens: json.usage.input_tokens,
@@ -85,15 +123,56 @@ export const AnthropicProvider: Provider = {
         const res = yield* Effect.flatMap(req, (r) => client.execute(r));
 
         return streamSSE(res.stream).pipe(
-          Stream.filterMap((json) => {
-            const j = json as { type: string; delta?: { text?: string } };
-            return j.type === 'content_block_delta'
-              ? Option.some({
+          Stream.filterMap((json): Option.Option<InternalStreamChunk> => {
+            const j = json as {
+              type: string;
+              index?: number;
+              delta?: { text?: string; partial_json?: string };
+            };
+            if (j.type === 'content_block_delta') {
+              let content: InternalStreamChunk['content'] = {
+                type: 'text_delta' as const,
+                text: j.delta?.text || '',
+              };
+              if (j.delta?.partial_json) {
+                content = {
+                  type: 'tool_use_delta' as const,
+                  index: j.index ?? 0,
+                  input: j.delta.partial_json,
+                };
+              }
+              return Option.some({
+                id: 'stream',
+                content,
+                done: false,
+              });
+            }
+            if (j.type === 'content_block_start') {
+              const start = j as { content_block?: { type: string; id: string; name: string } };
+              if (start.content_block?.type === 'tool_use') {
+                return Option.some({
                   id: 'stream',
-                  content: j.delta?.text || '',
+                  content: {
+                    type: 'tool_use_delta' as const,
+                    index: j.index ?? 0,
+                    id: start.content_block.id,
+                    name: start.content_block.name,
+                  },
                   done: false,
-                })
-              : Option.none();
+                });
+              }
+            }
+            if (j.type === 'message_delta') {
+              const delta = j as { delta?: { stop_reason?: string } };
+              if (delta.delta?.stop_reason) {
+                return Option.some({
+                  id: 'stream',
+                  content: { type: 'text_delta' as const, text: '' },
+                  done: true,
+                });
+              }
+            }
+            return Option.none();
           }),
         );
       }),
