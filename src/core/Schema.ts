@@ -46,6 +46,7 @@ export const InternalRequest = Schema.Struct({
   ),
   temperature: Schema.optional(Schema.Number),
   topP: Schema.optional(Schema.Number),
+  topK: Schema.optional(Schema.Number),
   maxTokens: Schema.optional(Schema.Number),
   stream: Schema.optionalWith(Schema.Boolean, { default: () => false }),
   stop: Schema.optional(Schema.Array(Schema.String)),

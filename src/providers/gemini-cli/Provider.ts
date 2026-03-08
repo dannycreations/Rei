@@ -88,6 +88,7 @@ const mapRequest = (request: InternalRequest) => {
       temperature: request.temperature,
       maxOutputTokens: request.maxTokens,
       topP: request.topP,
+      topK: request.topK,
       stopSequences: request.stop,
     },
   };
@@ -104,7 +105,7 @@ const ensureProjectId = (session: AuthSession<OAuthCredentials>): Effect.Effect<
     );
 
     if (Option.isSome(envContent)) {
-      const match = envContent.value.match(/GOOGLE_CLOUD_PROJECT=[\"']?([^\"'\\r\\n\\s;]+)[\"']?/);
+      const match = envContent.value.match(/GOOGLE_CLOUD_PROJECT=["']?([^"'\r\n\s;]+)["']?/);
       if (match) {
         const id = match[1].trim();
         yield* session.save({ ...session.data, project_id: id });
@@ -182,7 +183,7 @@ const ensureAuthenticated = (): Effect.Effect<
             Effect.catchAll(() => Effect.succeed(undefined)),
           );
           if (envContent !== undefined) {
-            const match = envContent.match(/GOOGLE_OAUTH_PATH=[\"']?([^\"'\\r\\n\\s]+)[\"']?/);
+            const match = envContent.match(/GOOGLE_OAUTH_PATH=["']?([^"'\r\n\s;]+)["']?/);
             if (match) oauthPath = match[1].trim();
           }
           const credPath = oauthPath || OAUTH_DEFAULT_PATH;

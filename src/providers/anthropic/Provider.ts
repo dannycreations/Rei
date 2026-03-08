@@ -55,6 +55,7 @@ const mapRequest = (request: InternalRequest) => ({
   max_tokens: request.maxTokens ?? 4096,
   temperature: request.temperature,
   top_p: request.topP,
+  top_k: request.topK,
   stop_sequences: request.stop,
   stream: request.stream,
 });

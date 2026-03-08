@@ -67,6 +67,7 @@ export const OpenAIRequest = Schema.Struct({
   temperature: Schema.optional(Schema.Number),
   max_tokens: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
+  top_k: Schema.optional(Schema.Number),
   stream: Schema.optionalWith(Schema.Boolean, { default: () => false }),
   stop: Schema.optional(Schema.Union(Schema.String, Schema.Array(Schema.String))),
 });
@@ -187,6 +188,7 @@ export const OpenAIHandler: ApiHandler<OpenAIRequest, OpenAIResponse> = {
             : undefined,
       temperature: req.temperature,
       topP: req.top_p,
+      topK: req.top_k,
       maxTokens: req.max_tokens,
       stream: req.stream ?? false,
       stop: typeof req.stop === 'string' ? [req.stop] : req.stop,

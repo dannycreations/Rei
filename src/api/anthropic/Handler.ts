@@ -61,6 +61,7 @@ export const AnthropicRequest = Schema.Struct({
   max_tokens: Schema.Number,
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
+  top_k: Schema.optional(Schema.Number),
   stream: Schema.optional(Schema.Boolean),
   stop_sequences: Schema.optional(Schema.Array(Schema.String)),
 });
@@ -121,6 +122,7 @@ export const AnthropicHandler: ApiHandler<AnthropicRequest, AnthropicResponse> =
     maxTokens: req.max_tokens,
     temperature: req.temperature,
     topP: req.top_p,
+    topK: req.top_k,
     stream: req.stream ?? false,
     stop: req.stop_sequences,
   }),

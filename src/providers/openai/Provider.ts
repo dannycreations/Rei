@@ -91,6 +91,7 @@ const mapRequest = (request: InternalRequest) => {
     max_tokens: request.maxTokens,
     stream: request.stream,
     top_p: request.topP,
+    top_k: request.topK,
     stop: request.stop,
   };
 };
