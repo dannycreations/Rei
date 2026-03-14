@@ -99,28 +99,6 @@ export const Dispatcher = Effect.gen(function* () {
   };
 });
 
-const corsMiddleware = HttpMiddleware.make((httpApp) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-
-    if (request.method === 'OPTIONS') {
-      return HttpServerResponse.empty({ status: 204 }).pipe(
-        HttpServerResponse.setHeader('Access-Control-Allow-Origin', '*'),
-        HttpServerResponse.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'),
-        HttpServerResponse.setHeader('Access-Control-Allow-Headers', '*'),
-      );
-    }
-
-    const response = yield* httpApp;
-
-    return response.pipe(
-      HttpServerResponse.setHeader('Access-Control-Allow-Origin', '*'),
-      HttpServerResponse.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'),
-      HttpServerResponse.setHeader('Access-Control-Allow-Headers', '*'),
-    );
-  }),
-);
-
 const authMiddleware = HttpMiddleware.make((httpApp) =>
   Effect.gen(function* () {
     const config = yield* ConfigTag;
@@ -148,10 +126,10 @@ const authMiddleware = HttpMiddleware.make((httpApp) =>
 );
 
 export const server = HttpRouter.empty.pipe(
-  HttpRouter.use(corsMiddleware),
   HttpRouter.use(authMiddleware),
   HttpRouter.concat(openAIRouter),
   HttpRouter.concat(anthropicRouter),
   HttpRouter.get('/v1/models', Effect.flatMap(Dispatcher, (d) => d.models()).pipe(Effect.flatten)),
-  HttpRouter.all('*', HttpServerResponse.empty()),
+  HttpRouter.all('*', HttpServerResponse.empty({ status: 404 })),
+  HttpMiddleware.cors(),
 );
